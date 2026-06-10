@@ -6,4 +6,8 @@ license.workspace = true
 
 [dependencies]
 opengen-compile.workspace = true
+opengen-genexpr.workspace = true
+opengen-ops.workspace = true
 opengen-testkit.workspace = true
+rustfft = "6"
+hound = "3"
