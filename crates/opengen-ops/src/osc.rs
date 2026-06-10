@@ -37,12 +37,15 @@ pub fn phasor(inputs: &[f64], state: &mut [f64], sr: f64) -> f64 {
     // Advance phase with wrapping
     let mut next_phase = phase + freq / sr;
     
-    // Wrap to [0, 1)
-    if next_phase < 0.0 {
-        next_phase = 1.0 + next_phase;
-    }
+    // Wrap to [0, 1) for ANY finite increment (handles |freq/sr| >= 1.0)
+    // x - floor(x) maps any value to [0, 1); for in-range values floor(x)==0.0
+    // so this is exact and doesn't perturb the existing doctest expectations.
+    next_phase -= next_phase.floor();
+    
+    // Guard: floating-point edge case where result could be exactly 1.0
+    // (e.g., tiny negative values like -1e-17 → -1e-17 + 1.0 may round to 1.0)
     if next_phase >= 1.0 {
-        next_phase = next_phase - 1.0;
+        next_phase = 0.0;
     }
     
     state[0] = next_phase;
@@ -86,12 +89,15 @@ pub fn cycle(inputs: &[f64], state: &mut [f64], sr: f64) -> f64 {
     // Advance phase with wrapping (same as phasor)
     let mut next_phase = phase + freq / sr;
     
-    // Wrap to [0, 1)
-    if next_phase < 0.0 {
-        next_phase = 1.0 + next_phase;
-    }
+    // Wrap to [0, 1) for ANY finite increment (handles |freq/sr| >= 1.0)
+    // x - floor(x) maps any value to [0, 1); for in-range values floor(x)==0.0
+    // so this is exact and doesn't perturb the existing doctest expectations.
+    next_phase -= next_phase.floor();
+    
+    // Guard: floating-point edge case where result could be exactly 1.0
+    // (e.g., tiny negative values like -1e-17 → -1e-17 + 1.0 may round to 1.0)
     if next_phase >= 1.0 {
-        next_phase = next_phase - 1.0;
+        next_phase = 0.0;
     }
     
     state[0] = next_phase;
@@ -253,5 +259,42 @@ mod tests {
         for &val in out.ch(0) {
             assert!(val >= -1.0 && val < 1.0, "Out of range: {}", val);
         }
+    }
+
+    #[test]
+    fn phasor_high_freq_wrap() {
+        // Test freq/sr = 2.5: freq=120000, sr=48000
+        // Expected: y[0]=0.0, y[1]=wrap(2.5)=0.5, y[2]=wrap(0.5+2.5)=wrap(3.0)=0.0
+        let out = render("out1 = phasor(120000);", 48000.0, 3);
+        let samples = out.ch(0);
+        
+        // All samples must be in [0, 1)
+        for (i, &val) in samples.iter().enumerate() {
+            assert!(val >= 0.0 && val < 1.0, "Sample {} out of range [0,1): {}", i, val);
+        }
+        
+        // Check exact values
+        assert_eq!(samples[0], 0.0);
+        assert_eq!(samples[1], 0.5);
+        assert_eq!(samples[2], 0.0);
+    }
+
+    #[test]
+    fn phasor_negative_freq_wrap() {
+        // Test negative freq/sr = -1.25: freq=-60000, sr=48000
+        // Note: subtraction expression causes initial freq=0 eval, so we request 4 samples
+        // and check samples[1..]: expected 0.0 (phase at freq=0), 0.75, 0.5
+        let out = render("out1 = phasor(0 - 60000);", 48000.0, 4);
+        let samples = out.ch(0);
+        
+        // All samples must be in [0, 1)
+        for (i, &val) in samples.iter().enumerate() {
+            assert!(val >= 0.0 && val < 1.0, "Sample {} out of range [0,1): {}", i, val);
+        }
+        
+        // Check exact values (after initial freq=0 call)
+        assert_eq!(samples[1], 0.0);  // phase=0 at start of first freq=-60000 call
+        assert_eq!(samples[2], 0.75); // phase=0.75 after wrapping -1.25
+        assert_eq!(samples[3], 0.5);  // phase=0.5 after wrapping -0.5
     }
 }
