@@ -10,11 +10,15 @@
 //! Renaming convention: `__inl<N>_<name>` where N is a per-call-site counter.
 //! History declarations inside functions get fresh declarations per inline instance.
 //!
-//! # Early-return support decision
-//! This implementation supports return as the final statement of a function body,
-//! and returns inside if/else where BOTH branches return or the trailing return exists.
-//! Other early-return patterns (return inside while, return before end of if-without-else)
-//! produce a clear LowerError.
+//! # Early-return support decision (M2)
+//! In M2, `return` is only legal as the sole or final top-level statement of a
+//! function body. No-return functions are also accepted. Any return nested inside
+//! If/While/DoWhile/For/Block, multiple returns, or a return followed by trailing
+//! statements produces a clear `LowerError` containing "early return".
+//!
+//! Full early-return support (where return acts as an actual control-flow barrier)
+//! is planned for M3 and will require rewriting the inliner to generate proper
+//! branch-and-merge control flow instead of sequential assignments.
 //!
 //! # Multi-assign destructuring (§7)
 //! Rules from docs/research/gen_docs/genexpr_language_reference.md §7:
@@ -25,6 +29,83 @@ use crate::ast::*;
 use crate::lower::LowerError;
 use std::collections::{HashMap, HashSet};
 
+/// Validate that a function body has no early returns.
+///
+/// In M2, `return` is only legal as the sole/final top-level statement of the
+/// function body. Any return nested inside If/While/DoWhile/For/Block, multiple
+/// returns, or a return followed by trailing statements produces a clear error.
+fn validate_early_returns(func: &FuncInfo) -> Result<(), LowerError> {
+    let body = &func.body;
+    for (i, stmt) in body.iter().enumerate() {
+        let is_last = i == body.len() - 1;
+        // Non-final return at top level → multiple returns / return-with-trailing
+        if !is_last && is_or_contains_return(stmt) {
+            return Err(LowerError {
+                msg: format!(
+                    "early return in function '{}': return must be the final statement of the function body",
+                    func.name
+                ),
+                loc: Some(stmt.loc),
+            });
+        }
+        // Any return nested inside If/While/DoWhile/For → early return
+        if contains_nested_return_in_control_flow(stmt) {
+            return Err(LowerError {
+                msg: format!(
+                    "early return in function '{}': return inside control-flow construct is not supported (M2 limitation)",
+                    func.name
+                ),
+                loc: Some(stmt.loc),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// True if the statement (or any recursively contained statement) is a Return.
+fn is_or_contains_return(stmt: &Statement) -> bool {
+    match &stmt.kind {
+        StatementKind::Return(_) => true,
+        StatementKind::Block(stmts) => stmts.iter().any(is_or_contains_return),
+        StatementKind::If { then_branch, else_branch, .. } => {
+            is_or_contains_return(then_branch)
+                || else_branch.as_ref().is_some_and(|e| is_or_contains_return(e))
+        }
+        _ => false,
+    }
+}
+
+/// True if a Return is nested inside a control-flow construct
+/// (If/While/DoWhile/For), as opposed to being a bare top-level Return.
+fn contains_nested_return_in_control_flow(stmt: &Statement) -> bool {
+    match &stmt.kind {
+        StatementKind::Block(stmts) => stmts.iter().any(is_or_contains_return),
+        StatementKind::If { .. } | StatementKind::While { .. }
+        | StatementKind::DoWhile { .. } | StatementKind::For { .. } => {
+            // Any return inside these is nested (not bare top-level)
+            has_return_deep(stmt)
+        }
+        StatementKind::Return(_) => false, // handled by the non-final check
+        _ => false,
+    }
+}
+
+/// Recursively check for any Return anywhere in the statement tree.
+fn has_return_deep(stmt: &Statement) -> bool {
+    match &stmt.kind {
+        StatementKind::Return(_) => true,
+        StatementKind::Block(stmts) => stmts.iter().any(has_return_deep),
+        StatementKind::If { then_branch, else_branch, .. } => {
+            has_return_deep(then_branch)
+                || else_branch.as_ref().is_some_and(|e| has_return_deep(e))
+        }
+        StatementKind::While { body, .. } => has_return_deep(body),
+        StatementKind::DoWhile { body, .. } => has_return_deep(body),
+        StatementKind::For { body, .. } => has_return_deep(body),
+        _ => false,
+    }
+}
+
 /// Collect function declarations from a program, detect recursion, and inline
 /// all user function calls. Modifies the program in place.
 pub fn inline_functions(program: &mut Program) -> Result<(), LowerError> {
@@ -34,10 +115,15 @@ pub fn inline_functions(program: &mut Program) -> Result<(), LowerError> {
         return Ok(());
     }
 
-    // Phase 2: Detect recursion
+    // Phase 2: Validate no early returns
+    for func in funcs.values() {
+        validate_early_returns(func)?;
+    }
+
+    // Phase 3: Detect recursion
     detect_recursion(&funcs)?;
 
-    // Phase 3: Inline function calls in program statements
+    // Phase 4: Inline function calls in program statements
     let mut counter = 0usize;
     let mut new_stmts: Vec<Statement> = Vec::new();
     for stmt in &program.statements {
@@ -59,12 +145,9 @@ pub fn inline_functions(program: &mut Program) -> Result<(), LowerError> {
 
 /// Information about a user-defined function.
 struct FuncInfo {
-    #[allow(dead_code)]
     name: String,
     params: Vec<String>,
     body: Vec<Statement>,
-    #[allow(dead_code)]
-    loc: SourceLoc,
 }
 
 /// Result of inlining calls within an expression.
@@ -100,7 +183,6 @@ fn extract_funcs(program: &Program) -> Result<HashMap<String, FuncInfo>, LowerEr
                     name: name.clone(),
                     params: params.clone(),
                     body: body.clone(),
-                    loc: stmt.loc,
                 },
             );
         }
@@ -708,18 +790,6 @@ fn inline_in_expr(
     }
 }
 
-/// Inline the body of a function with renamed identifiers (no extra params).
-#[allow(dead_code)]
-fn inline_body(
-    body: &[Statement],
-    funcs: &HashMap<String, FuncInfo>,
-    instance_id: usize,
-    counter: &mut usize,
-    loc: SourceLoc,
-) -> Result<Vec<Statement>, LowerError> {
-    inline_body_with_params(body, &[], funcs, instance_id, counter, loc)
-}
-
 /// Inline the body of a function with renamed identifiers.
 /// `params` is the list of parameter names that also need renaming.
 fn inline_body_with_params(
@@ -983,23 +1053,6 @@ fn inline_body_single_with_params(
 ) -> Result<Statement, LowerError> {
     let stmts = inline_body_with_params(
         &[stmt.clone()], params, funcs, instance_id, counter, loc)?;
-    if stmts.len() == 1 {
-        Ok(stmts.into_iter().next().unwrap())
-    } else {
-        Ok(Statement { kind: StatementKind::Block(stmts), loc })
-    }
-}
-
-/// Wrapper without params (used by inline_body which has no params).
-#[allow(dead_code)]
-fn inline_body_single(
-    stmt: &Statement,
-    funcs: &HashMap<String, FuncInfo>,
-    instance_id: usize,
-    counter: &mut usize,
-    loc: SourceLoc,
-) -> Result<Statement, LowerError> {
-    let stmts = inline_body(&[stmt.clone()], funcs, instance_id, counter, loc)?;
     if stmts.len() == 1 {
         Ok(stmts.into_iter().next().unwrap())
     } else {

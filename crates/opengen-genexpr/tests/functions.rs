@@ -121,8 +121,11 @@ fn function_with_control_flow_inlines_into_region() {
     let src =
         "abs_diff(a, b) { if (a > b) { return a - b; } else { return b - a; } }\
          out1 = abs_diff(5, 3) + abs_diff(2, 7);";
-    let out = render(src, 48_000.0, 1);
-    assert_eq!(out.ch(0)[0], 7.0); // 2 + 5 = 7
+    let err = opengen_genexpr::parse_and_lower(src).unwrap_err();
+    assert!(
+        err.contains("early return"),
+        "expected error containing 'early return', got: {err}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -163,5 +166,45 @@ fn return_outside_function_errors() {
     assert!(
         err.contains("return"),
         "expected error about return, got: {err}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Early returns are rejected (M2 limitation)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn early_return_in_if_is_rejected() {
+    let err = opengen_genexpr::parse_and_lower(
+        "f(x) { if (x > 0) { return 1; } return 2; }\nout1 = f(1);",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("early return"),
+        "expected error containing 'early return', got: {err}"
+    );
+}
+
+#[test]
+fn return_inside_while_is_rejected() {
+    let err = opengen_genexpr::parse_and_lower(
+        "f(x) { while (x > 0) { return 1; } return 2; }\nout1 = f(1);",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("early return"),
+        "expected error containing 'early return', got: {err}"
+    );
+}
+
+#[test]
+fn return_followed_by_statements_is_rejected() {
+    let err = opengen_genexpr::parse_and_lower(
+        "f(x) { return 1; y = 2; }\nout1 = f(1);",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("early return") || err.contains("return must be"),
+        "expected error containing 'early return' or 'return must be', got: {err}"
     );
 }
