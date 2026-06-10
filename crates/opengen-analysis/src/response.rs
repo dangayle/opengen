@@ -12,7 +12,19 @@ pub struct Response {
 }
 
 impl Response {
+    /// Return the magnitude response in dB at the given frequency.
+    ///
+    /// # Valid Range
+    /// `hz` must be in the range `[0.0, sr/2.0]` (DC to Nyquist frequency).
+    ///
+    /// # Panics
+    /// Panics if `hz` is negative or above the Nyquist frequency.
     pub fn db_at(&self, hz: f64) -> f64 {
+        assert!(
+            hz >= 0.0 && hz <= self.sr / 2.0,
+            "frequency {hz} Hz out of range [0, {}]",
+            self.sr / 2.0
+        );
         let bin_spacing = self.sr / self.nfft as f64;
         let exact_bin = hz / bin_spacing;
         
@@ -34,7 +46,23 @@ impl Response {
         }
     }
     
+    /// Return the phase response in radians at the given frequency.
+    ///
+    /// # Valid Range
+    /// `hz` must be in the range `[0.0, sr/2.0]` (DC to Nyquist frequency).
+    ///
+    /// # Interpolation
+    /// Phase is linearly interpolated between FFT bins. Phase wraps near ±π
+    /// are not specially handled (this is an M1 limitation).
+    ///
+    /// # Panics
+    /// Panics if `hz` is negative or above the Nyquist frequency.
     pub fn phase_at(&self, hz: f64) -> f64 {
+        assert!(
+            hz >= 0.0 && hz <= self.sr / 2.0,
+            "frequency {hz} Hz out of range [0, {}]",
+            self.sr / 2.0
+        );
         let bin_spacing = self.sr / self.nfft as f64;
         let exact_bin = hz / bin_spacing;
         
@@ -95,4 +123,41 @@ pub fn freq_response(src: &str, sr: f64, nfft: usize) -> Response {
     let spectrum = buffer.into_iter().take(nfft / 2 + 1).collect();
     
     Response { spectrum, sr, nfft }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    #[should_panic(expected = "frequency -1 Hz out of range")]
+    fn db_at_negative_hz_panics() {
+        let src = "out1 = in1;";
+        let h = freq_response(src, 48_000.0, 8192);
+        h.db_at(-1.0);
+    }
+    
+    #[test]
+    #[should_panic(expected = "frequency 48000 Hz out of range")]
+    fn db_at_above_nyquist_panics() {
+        let src = "out1 = in1;";
+        let h = freq_response(src, 48_000.0, 8192);
+        h.db_at(48_000.0); // sr = 48000, Nyquist = 24000
+    }
+    
+    #[test]
+    #[should_panic(expected = "frequency -1 Hz out of range")]
+    fn phase_at_negative_hz_panics() {
+        let src = "out1 = in1;";
+        let h = freq_response(src, 48_000.0, 8192);
+        h.phase_at(-1.0);
+    }
+    
+    #[test]
+    #[should_panic(expected = "frequency 48000 Hz out of range")]
+    fn phase_at_above_nyquist_panics() {
+        let src = "out1 = in1;";
+        let h = freq_response(src, 48_000.0, 8192);
+        h.phase_at(48_000.0); // sr = 48000, Nyquist = 24000
+    }
 }

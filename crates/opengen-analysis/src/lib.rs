@@ -5,6 +5,12 @@ pub mod wav;
 
 mod response;
 
+/// Hidden helper for macro hygiene - allows `assert_render_matches!` to work cross-crate.
+#[doc(hidden)]
+pub fn __testkit_render(src: &str, sr: f64, n: usize) -> opengen_testkit::Render {
+    opengen_testkit::render(src, sr, n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

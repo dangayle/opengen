@@ -69,7 +69,7 @@ macro_rules! assert_render_matches {
         let bless = std::env::var("OPENGEN_BLESS").is_ok();
         
         // Render the source at 48 kHz for 1 second (48000 samples)
-        let render = opengen_testkit::render($src, 48_000.0, 48_000);
+        let render = $crate::__testkit_render($src, 48_000.0, 48_000);
         let samples: Vec<f64> = render.ch(0).to_vec();
         
         if bless {
@@ -133,5 +133,18 @@ mod tests {
         
         // Clean up
         std::fs::remove_file(&path).ok();
+    }
+    
+    #[test]
+    fn macro_hygiene_with_missing_golden() {
+        // Test that the macro works via $crate:: and skips when golden is missing
+        let temp_dir = env::temp_dir();
+        let nonexistent = temp_dir.join("opengen_nonexistent_golden.wav");
+        
+        // Ensure the golden file doesn't exist
+        std::fs::remove_file(&nonexistent).ok();
+        
+        // This should skip (not panic) because the golden file is missing
+        assert_render_matches!("out1 = in1;", nonexistent.to_str().unwrap(), 1e-6);
     }
 }
