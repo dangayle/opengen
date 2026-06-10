@@ -1,5 +1,7 @@
 //! Typed dataflow IR, operator registry, type/shape checking
 
+pub mod proc;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub u32);
 
@@ -17,6 +19,7 @@ pub enum NodeKind {
     Input(u16),
     Output(u16),
     Op { name: String, args: Vec<f64>, state: StateDecl },
+    Region(proc::ProcRegion),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,11 +35,18 @@ impl Node {
     pub fn op(name: &str, args: Vec<f64>, state: StateDecl) -> Self {
         Node { kind: NodeKind::Op { name: name.into(), args, state } }
     }
+    pub fn region(r: proc::ProcRegion) -> Self {
+        Node { kind: NodeKind::Region(r) }
+    }
     pub fn op_name(&self) -> Option<&str> {
         match &self.kind { NodeKind::Op { name, .. } => Some(name), _ => None }
     }
     pub fn state(&self) -> StateDecl {
-        match &self.kind { NodeKind::Op { state, .. } => *state, _ => StateDecl::None }
+        match &self.kind {
+            NodeKind::Op { state, .. } => *state,
+            NodeKind::Region(r) => StateDecl::Slots(r.n_state),
+            _ => StateDecl::None,
+        }
     }
 }
 
