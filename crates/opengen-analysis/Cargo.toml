@@ -1,0 +1,9 @@
+[package]
+name = "opengen-analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+opengen-compile.workspace = true
+opengen-testkit.workspace = true

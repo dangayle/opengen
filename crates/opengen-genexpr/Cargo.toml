@@ -1,0 +1,9 @@
+[package]
+name = "opengen-genexpr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+opengen-ir.workspace = true
+opengen-ops.workspace = true

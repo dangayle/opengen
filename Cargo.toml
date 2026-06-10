@@ -1,6 +1,16 @@
-[package]
-name = "opengen"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 
-[dependencies]
+[workspace.dependencies]
+opengen-ir = { path = "crates/opengen-ir" }
+opengen-ops = { path = "crates/opengen-ops" }
+opengen-genexpr = { path = "crates/opengen-genexpr" }
+opengen-compile = { path = "crates/opengen-compile" }
+opengen-testkit = { path = "crates/opengen-testkit" }
+opengen-analysis = { path = "crates/opengen-analysis" }
