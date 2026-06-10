@@ -671,7 +671,9 @@ impl<'a> BuildCtx<'a> {
     }
 
     /// Find all graph edges that consume from a given source port.
-    /// Brute-force: check all 16 inlet slots of every node.
+    /// Brute-force: check all inlets of every node.
+    /// NOTE: gen~ boxes never exceed 16 inlets in practice; bound revisited if abstraction
+    /// inlining needs more.
     fn find_consumers(&self, src: Port) -> Vec<Port> {
         let mut result = Vec::new();
         for (node_id, _) in self.graph.nodes() {
@@ -1052,5 +1054,42 @@ mod tests {
         // out1 = in1 * g = 2 * 2 = 4
         let out = build_and_render_with_inputs(src, 48000.0, &[&[2.0]]);
         assert_eq!(out.ch(0), &[4.0]); // in1 * setparam_driven_g = 2 * 2
+    }
+
+    /// A line referencing a non-existent source box should produce Err, not a panic.
+    #[test]
+    fn build_rejects_line_to_nonexistent_box() {
+        let patcher = Patcher {
+            boxes: vec![
+                crate::model::GBox {
+                    id: "obj-1".to_string(),
+                    maxclass: "newobj".to_string(),
+                    text: "in 1".to_string(),
+                    code: String::new(),
+                    numinlets: 0,
+                    numoutlets: 1,
+                    subpatcher: None,
+                },
+                crate::model::GBox {
+                    id: "obj-2".to_string(),
+                    maxclass: "newobj".to_string(),
+                    text: "out 1".to_string(),
+                    code: String::new(),
+                    numinlets: 1,
+                    numoutlets: 0,
+                    subpatcher: None,
+                },
+            ],
+            lines: vec![
+                crate::model::Line {
+                    src: ("obj-99".to_string(), 0),
+                    dst: ("obj-2".to_string(), 0),
+                },
+            ],
+        };
+        let result = build_graph(&patcher, &opengen_ops::Registry::core());
+        assert!(result.is_err(), "expected Err for line to non-existent box, got Ok");
+        let err = result.unwrap_err();
+        assert!(err.contains("obj-99"), "error should mention the missing box id: {}", err);
     }
 }

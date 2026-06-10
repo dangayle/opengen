@@ -4,6 +4,17 @@
 //! scientific-notation numbers (f64), and trailing-garbage tolerance for
 //! embedded JSON inside binary `.amxd` containers.
 //!
+//! # Design decisions
+//!
+//! - **Trailing-garbage tolerance** (`.5` as a number): The parser accepts numbers
+//!   starting with a decimal point (e.g., `.5`) even though strict JSON requires
+//!   an integer part (`0.5`). This is a deliberate leniency for embedded `.gendsp`
+//!   files which occasionally contain this form; it is NOT standard JSON per
+//!   ECMA-404 / RFC 8259.
+//! - **No recursion depth guard:** `.gendsp` files are shallow by design (nesting
+//!   depth rarely exceeds 2–3 levels for subpatchers). The recursive descent
+//!   parser will stack-overflow on malicious input; no depth guard is added.
+//!
 //! # Provenance
 //!
 //! Written from scratch. Grammar per ECMA-404 / RFC 8259.
