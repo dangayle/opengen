@@ -452,16 +452,6 @@ fn compile_impl(
     sr: f64,
     probe_names: &[&str],
 ) -> Result<Patch, CompileError> {
-    // Resolve probe names to NodeIds
-    let mut probes: HashMap<String, (usize, Vec<f64>)> = HashMap::new();
-    for &name in probe_names {
-        let node_id = g.binding(name).ok_or_else(|| {
-            CompileError(format!("probe '{}' not found in graph bindings", name))
-        })?;
-        let value_slot = node_id.0 as usize;
-        probes.insert(name.to_string(), (value_slot, Vec::new()));
-    }
-
     let node_count = g.nodes().count();
 
     // Build the slot_of map: (NodeId, port_index) → value slot.
@@ -485,6 +475,17 @@ fn compile_impl(
     }
 
     let extra_slots = next_extra_slot - (node_count + 1);
+
+    // Resolve probe names to NodeIds — after slot_of is built so we can
+    // use slot_of lookups for consistency.
+    let mut probes: HashMap<String, (usize, Vec<f64>)> = HashMap::new();
+    for &name in probe_names {
+        let node_id = g.binding(name).ok_or_else(|| {
+            CompileError(format!("probe '{}' not found in graph bindings", name))
+        })?;
+        let value_slot = slot_of[&(node_id, 0)];
+        probes.insert(name.to_string(), (value_slot, Vec::new()));
+    }
 
     // Allocate value slots and state arena
     let mut state_offset = 0;
@@ -606,7 +607,7 @@ fn compile_impl(
 
     for &id in &topo_order {
         let node = g.node(id);
-        let value_slot = id.0 as usize;
+        let value_slot = slot_of[&(id, 0)];
 
         match &node.kind {
             NodeKind::Constant(v) => {
@@ -778,11 +779,17 @@ fn compile_impl(
             }
             NodeKind::Region(r) => {
                 if let Some(range) = state_ranges.get(&id) {
-                    // Apply state_init values
+                    let n_state = range.end - range.start;
+                    if r.state_init.len() != n_state {
+                        return Err(CompileError(format!(
+                            "region node {} state_init length {} does not match n_state {}",
+                            id.0,
+                            r.state_init.len(),
+                            n_state,
+                        )));
+                    }
                     for (i, &v) in r.state_init.iter().enumerate() {
-                        if i + range.start < range.end {
-                            state[range.start + i] = v;
-                        }
+                        state[range.start + i] = v;
                     }
                 }
             }

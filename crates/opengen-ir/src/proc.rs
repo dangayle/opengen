@@ -57,6 +57,10 @@ pub enum PStmt {
 }
 
 /// A structured procedural region — the compiled form of a codebox.
+///
+/// # Output semantics
+/// Output ports retain their value from the previous sample unless
+/// explicitly written by a `SetOut` statement this sample.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ProcRegion {
     /// Number of input ports (fed by graph edges).
