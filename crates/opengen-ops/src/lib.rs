@@ -3,4 +3,5 @@
 pub mod registry;
 pub mod math;
 pub mod compare;
+pub mod range;
 pub use registry::{Registry, OpDef, Kernel};
