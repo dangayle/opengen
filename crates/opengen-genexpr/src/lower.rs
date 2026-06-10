@@ -1428,8 +1428,14 @@ fn has_stmt_control_flow(stmt: &Statement) -> bool {
 }
 
 pub fn lower(program: &Program) -> Result<Graph, LowerError> {
+    let mut program = program.clone();
+    // Run inline pass first: user-defined functions, return, multi-assign.
+    // This must happen BEFORE the control-flow check so that inlined code
+    // with control flow triggers the region path, and so that all
+    // FuncDecl/Return/MultiAssign nodes are gone before lowering.
+    crate::inline::inline_functions(&mut program)?;
     let registry = Registry::core();
-    Lowerer::new(&registry).lower(program)
+    Lowerer::new(&registry).lower(&program)
 }
 
 // ---------------------------------------------------------------------------

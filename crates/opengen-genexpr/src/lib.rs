@@ -4,6 +4,7 @@ pub mod ast;
 mod lexer;
 mod parser;
 mod lower;
+pub mod inline;
 
 pub use ast::{Program, Statement, StatementKind, Expr, BinOpKind, SourceLoc,
     DeclType, Declarator, UnaryOp};
