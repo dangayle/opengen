@@ -91,6 +91,57 @@ fn logical_xor() {
 }
 
 #[test]
+fn caretcaret_binds_between_bitxor_and_bitand() {
+    // spec ladder (low→high): || → && → | → ^ → ^^ → & → equality → ...
+    // ^^ binds tighter than ^ and |; looser than &
+
+    // 1 & 2 ^^ 3  =>  LogicalXor(BitAnd(1,2), 3)   — & binds tighter, so (1&2) ^^ 3
+    let ast = parse("out1 = 1 & 2 ^^ 3;").unwrap();
+    match &ast.statements[0].kind {
+        StatementKind::Assign { expr, .. } => {
+            match expr {
+                Expr::BinOp { op: BinOpKind::LogicalXor, left, right } => {
+                    assert!(matches!(**left, Expr::BinOp { op: BinOpKind::BitAnd, .. }));
+                    assert!(matches!(**right, Expr::Number(3.0)));
+                }
+                other => panic!("expected LogicalXor at top for '1 & 2 ^^ 3', got {other:?}"),
+            }
+        }
+        _ => panic!("expected assign"),
+    }
+
+    // 1 ^ 2 ^^ 3  =>  BitXor(1, LogicalXor(2,3))  — ^^ binds tighter, so 1 ^ (2^^3)
+    let ast = parse("out1 = 1 ^ 2 ^^ 3;").unwrap();
+    match &ast.statements[0].kind {
+        StatementKind::Assign { expr, .. } => {
+            match expr {
+                Expr::BinOp { op: BinOpKind::BitXor, left, right } => {
+                    assert!(matches!(**left, Expr::Number(1.0)));
+                    assert!(matches!(**right, Expr::BinOp { op: BinOpKind::LogicalXor, .. }));
+                }
+                other => panic!("expected BitXor at top for '1 ^ 2 ^^ 3', got {other:?}"),
+            }
+        }
+        _ => panic!("expected assign"),
+    }
+
+    // 1 && 2 ^^ 3  =>  LogicalAnd(1, LogicalXor(2,3))  — ^^ binds tighter, so 1 && (2^^3)
+    let ast = parse("out1 = 1 && 2 ^^ 3;").unwrap();
+    match &ast.statements[0].kind {
+        StatementKind::Assign { expr, .. } => {
+            match expr {
+                Expr::BinOp { op: BinOpKind::LogicalAnd, left, right } => {
+                    assert!(matches!(**left, Expr::Number(1.0)));
+                    assert!(matches!(**right, Expr::BinOp { op: BinOpKind::LogicalXor, .. }));
+                }
+                other => panic!("expected LogicalAnd at top for '1 && 2 ^^ 3', got {other:?}"),
+            }
+        }
+        _ => panic!("expected assign"),
+    }
+}
+
+#[test]
 fn bitwise_ops() {
     let ast = parse("out1 = 5 & 3 | 1 ^ 2;").unwrap();
     match &ast.statements[0].kind {
@@ -515,6 +566,42 @@ fn bare_final_expression_sugar() {
             }));
         }
         other => panic!("expected Assign for bare expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn bare_expr_sugar_for_non_ident_expressions() {
+    // Bare expressions that don't start with an ident (e.g. parenthesized, unary)
+    // should also get out1 = sugar applied.
+    let ast = parse("(in1 + in2) * 0.5").unwrap();
+    match &ast.statements[0].kind {
+        StatementKind::Assign { name, expr } => {
+            assert_eq!(name, "out1");
+            assert!(matches!(expr, Expr::BinOp {
+                op: BinOpKind::Mul, ..
+            }), "expected Mul at top, got {expr:?}");
+        }
+        other => panic!("expected Assign for bare non-ident expression, got {other:?}"),
+    }
+
+    // Unary negation as bare expression
+    let ast = parse("!x").unwrap();
+    match &ast.statements[0].kind {
+        StatementKind::Assign { name, expr } => {
+            assert_eq!(name, "out1");
+            assert!(matches!(expr, Expr::Unary(UnaryOp::Not, _)));
+        }
+        other => panic!("expected Assign for bare '!x', got {other:?}"),
+    }
+
+    // Numeric literal as bare expression
+    let ast = parse("42").unwrap();
+    match &ast.statements[0].kind {
+        StatementKind::Assign { name, expr } => {
+            assert_eq!(name, "out1");
+            assert!(matches!(expr, Expr::Number(42.0)));
+        }
+        other => panic!("expected Assign for bare '42', got {other:?}"),
     }
 }
 

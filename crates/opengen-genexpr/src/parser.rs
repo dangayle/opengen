@@ -3,10 +3,10 @@
 //! Precedence ladder (low → high):
 //!   1.  Ternary `?:`                 (right-associative)
 //!   2.  `||`                         (logical or)
-//!   3.  `^^`                         (logical xor)
-//!   4.  `&&`                         (logical and)
-//!   5.  `|`                          (bitwise or)
-//!   6.  `^`                          (bitwise xor)
+//!   3.  `&&`                         (logical and)
+//!   4.  `|`                          (bitwise or)
+//!   5.  `^`                          (bitwise xor)
+//!   6.  `^^`                         (logical xor)
 //!   7.  `&`                          (bitwise and)
 //!   8.  `==` `!=`                    (equality)
 //!   9.  `<` `>` `<=` `>=`            (relational)
@@ -173,11 +173,17 @@ impl Parser {
                 if self.current == Token::Semicolon {
                     self.advance()?;
                     Ok(Statement { kind: StatementKind::ExprStmt(expr), loc })
+                } else if self.current == Token::Eof {
+                    // Bare expression at end of input (no semicolon) — desugar to out1 = expr
+                    Ok(Statement {
+                        kind: StatementKind::Assign {
+                            name: "out1".to_string(),
+                            expr,
+                        },
+                        loc,
+                    })
                 } else {
-                    // Bare expression at end of input (no semicolon)
-                    // This will be handled by the program-level desugaring
-                    // But we need to NOT consume the EOF here.
-                    Ok(Statement { kind: StatementKind::ExprStmt(expr), loc })
+                    Err(format!("unexpected token {:?} after expression", self.current))
                 }
             }
         }
@@ -649,30 +655,13 @@ impl Parser {
 
     /// Logical OR: ||
     fn parse_logical_or(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_logical_xor()?;
+        let mut left = self.parse_logical_and()?;
 
         while self.current == Token::OrOr {
             self.advance()?;
-            let right = self.parse_logical_xor()?;
-            left = Expr::BinOp {
-                op: BinOpKind::LogicalOr,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-        }
-
-        Ok(left)
-    }
-
-    /// Logical XOR: ^^
-    fn parse_logical_xor(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_logical_and()?;
-
-        while self.current == Token::CaretCaret {
-            self.advance()?;
             let right = self.parse_logical_and()?;
             left = Expr::BinOp {
-                op: BinOpKind::LogicalXor,
+                op: BinOpKind::LogicalOr,
                 left: Box::new(left),
                 right: Box::new(right),
             };
@@ -690,6 +679,23 @@ impl Parser {
             let right = self.parse_bitor()?;
             left = Expr::BinOp {
                 op: BinOpKind::LogicalAnd,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Logical XOR: ^^  (between ^ and & in the precedence ladder)
+    fn parse_xor_logical(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_bitand()?;
+
+        while self.current == Token::CaretCaret {
+            self.advance()?;
+            let right = self.parse_bitand()?;
+            left = Expr::BinOp {
+                op: BinOpKind::LogicalXor,
                 left: Box::new(left),
                 right: Box::new(right),
             };
@@ -717,11 +723,11 @@ impl Parser {
 
     /// Bitwise XOR: ^
     fn parse_bitxor(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_bitand()?;
+        let mut left = self.parse_xor_logical()?;
 
         while self.current == Token::Caret {
             self.advance()?;
-            let right = self.parse_bitand()?;
+            let right = self.parse_xor_logical()?;
             left = Expr::BinOp {
                 op: BinOpKind::BitXor,
                 left: Box::new(left),
