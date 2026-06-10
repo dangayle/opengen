@@ -35,7 +35,8 @@ struct Step {
 #[derive(Debug)]
 pub struct Patch {
     steps: Vec<Step>,
-    values: Vec<f64>,       // one slot per node
+    /// One value slot per node, indexed by NodeId.0.
+    values: Vec<f64>,
     state: Vec<f64>,        // flat state arena
     outputs: Vec<usize>,    // value slots feeding Output nodes, by output index
     sr: f64,
@@ -334,5 +335,35 @@ mod tests {
         let mut patch = compile(&g, &opengen_ops::Registry::core(), 48_000.0).unwrap();
         let out = patch.process(&[]);
         assert_eq!(out, vec![]);
+    }
+
+    #[test]
+    fn stateful_node_breaks_feedback_cycle() {
+        // A feedback loop through a node marked stateful must compile (cycle is
+        // broken by the deferred state-update). The "add" kernel ignores state,
+        // so this exercises the machinery only; true y[n] = x[n-1] semantics are
+        // specified by `history` (Task 9).
+        let mut g = Graph::new();
+        let acc = g.add_node(Node::op("add", vec![], StateDecl::Slots(1)));
+        let one = g.add_node(Node::constant(1.0));
+        let out = g.add_node(Node::output(0));
+        g.connect(Port { node: acc, index: 0 }, Port { node: acc, index: 0 }); // feedback
+        g.connect(Port { node: one, index: 0 }, Port { node: acc, index: 1 });
+        g.connect(Port { node: acc, index: 0 }, Port { node: out, index: 0 });
+        let mut patch = compile(&g, &opengen_ops::Registry::core(), 48_000.0).unwrap();
+        // Each sample reads its own previous output from the value slot: a counter.
+        assert_eq!(patch.process(&[]), vec![1.0]);
+        assert_eq!(patch.process(&[]), vec![2.0]);
+        assert_eq!(patch.process(&[]), vec![3.0]);
+    }
+
+    #[test]
+    fn rejects_unregistered_op() {
+        let mut g = Graph::new();
+        let bogus = g.add_node(Node::op("bogus", vec![], StateDecl::None));
+        let out = g.add_node(Node::output(0));
+        g.connect(Port { node: bogus, index: 0 }, Port { node: out, index: 0 });
+        let err = compile(&g, &opengen_ops::Registry::core(), 48_000.0).unwrap_err();
+        assert!(err.to_string().contains("bogus"));
     }
 }
