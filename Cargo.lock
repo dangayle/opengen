@@ -25,6 +25,7 @@ dependencies = [
  "opengen-compile",
  "opengen-ir",
  "opengen-ops",
+ "opengen-testkit",
 ]
 
 [[package]]

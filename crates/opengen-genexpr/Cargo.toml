@@ -10,3 +10,4 @@ opengen-ops.workspace = true
 
 [dev-dependencies]
 opengen-compile.workspace = true
+opengen-testkit.workspace = true

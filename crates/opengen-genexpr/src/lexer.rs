@@ -16,6 +16,14 @@ pub enum Token {
     Minus,
     Star,
     Slash,
+    Percent,
+    // Comparison operators
+    Gt,         // >
+    Gte,        // >=
+    Lt,         // <
+    Lte,        // <=
+    EqualEqual, // ==
+    BangEqual,  // !=
     // End of input
     Eof,
 }
@@ -69,18 +77,52 @@ impl Lexer {
             return self.read_ident_or_keyword();
         }
 
-        // Punctuation
+        // Multi-character operators
+        if ch == '>' {
+            self.advance();
+            if self.current() == Some('=') {
+                self.advance();
+                return Ok(Token::Gte);
+            }
+            return Ok(Token::Gt);
+        }
+        if ch == '<' {
+            self.advance();
+            if self.current() == Some('=') {
+                self.advance();
+                return Ok(Token::Lte);
+            }
+            return Ok(Token::Lt);
+        }
+        if ch == '=' {
+            self.advance();
+            if self.current() == Some('=') {
+                self.advance();
+                return Ok(Token::EqualEqual);
+            }
+            return Ok(Token::Equals);
+        }
+        if ch == '!' {
+            self.advance();
+            if self.current() == Some('=') {
+                self.advance();
+                return Ok(Token::BangEqual);
+            }
+            return Err("unexpected '!' (did you mean '!='?)".to_string());
+        }
+
+        // Single-character punctuation
         self.advance();
         match ch {
             '(' => Ok(Token::LParen),
             ')' => Ok(Token::RParen),
             ';' => Ok(Token::Semicolon),
             ',' => Ok(Token::Comma),
-            '=' => Ok(Token::Equals),
             '+' => Ok(Token::Plus),
             '-' => Ok(Token::Minus),
             '*' => Ok(Token::Star),
             '/' => Ok(Token::Slash),
+            '%' => Ok(Token::Percent),
             _ => Err(format!("unexpected character: '{}'", ch)),
         }
     }

@@ -89,7 +89,34 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_additive()
+        self.parse_comparison()
+    }
+
+    // Comparison: > >= < <= == !=
+    fn parse_comparison(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_additive()?;
+        
+        loop {
+            let op = match &self.current {
+                Token::Gt => BinOpKind::Gt,
+                Token::Gte => BinOpKind::Gte,
+                Token::Lt => BinOpKind::Lt,
+                Token::Lte => BinOpKind::Lte,
+                Token::EqualEqual => BinOpKind::Eq,
+                Token::BangEqual => BinOpKind::Neq,
+                _ => break,
+            };
+            self.advance()?;
+            
+            let right = self.parse_additive()?;
+            left = Expr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        
+        Ok(left)
     }
 
     // Additive: + -
@@ -115,7 +142,7 @@ impl Parser {
         Ok(left)
     }
 
-    // Multiplicative: * /
+    // Multiplicative: * / %
     fn parse_multiplicative(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_unary()?;
         
@@ -123,6 +150,7 @@ impl Parser {
             let op = match &self.current {
                 Token::Star => BinOpKind::Mul,
                 Token::Slash => BinOpKind::Div,
+                Token::Percent => BinOpKind::Mod,
                 _ => break,
             };
             self.advance()?;
@@ -278,6 +306,68 @@ mod tests {
                         assert!(matches!(args[0], Expr::Ident(ref s) if s == "freq"));
                     }
                     _ => panic!("expected call expression"),
+                }
+            }
+            _ => panic!("expected assignment"),
+        }
+    }
+
+    #[test]
+    fn parses_modulo_operator() {
+        let mut parser = Parser::new("out1 = 5 % 2;").unwrap();
+        let prog = parser.parse_program().unwrap();
+        match &prog.statements[0] {
+            Statement::Assign { expr, .. } => {
+                match expr {
+                    Expr::BinOp { op: BinOpKind::Mod, .. } => {}
+                    _ => panic!("expected modulo operation"),
+                }
+            }
+            _ => panic!("expected assignment"),
+        }
+    }
+
+    #[test]
+    fn parses_comparison_operators() {
+        let cases = vec![
+            ("out1 = 2 > 1;", BinOpKind::Gt),
+            ("out1 = 2 >= 1;", BinOpKind::Gte),
+            ("out1 = 1 < 2;", BinOpKind::Lt),
+            ("out1 = 1 <= 2;", BinOpKind::Lte),
+            ("out1 = 1 == 1;", BinOpKind::Eq),
+            ("out1 = 1 != 2;", BinOpKind::Neq),
+        ];
+        
+        for (src, expected_op) in cases {
+            let mut parser = Parser::new(src).unwrap();
+            let prog = parser.parse_program().unwrap();
+            match &prog.statements[0] {
+                Statement::Assign { expr, .. } => {
+                    match expr {
+                        Expr::BinOp { op, .. } => {
+                            assert_eq!(*op, expected_op, "Failed for: {}", src);
+                        }
+                        _ => panic!("expected binary operation for: {}", src),
+                    }
+                }
+                _ => panic!("expected assignment for: {}", src),
+            }
+        }
+    }
+
+    #[test]
+    fn comparison_has_lower_precedence_than_arithmetic() {
+        let mut parser = Parser::new("out1 = 1 + 2 > 3;").unwrap();
+        let prog = parser.parse_program().unwrap();
+        match &prog.statements[0] {
+            Statement::Assign { expr, .. } => {
+                // Should be Gt(Add(1, 2), 3)
+                match expr {
+                    Expr::BinOp { op: BinOpKind::Gt, left, right } => {
+                        assert!(matches!(**left, Expr::BinOp { op: BinOpKind::Add, .. }));
+                        assert!(matches!(**right, Expr::Number(3.0)));
+                    }
+                    _ => panic!("expected comparison at top level"),
                 }
             }
             _ => panic!("expected assignment"),

@@ -294,4 +294,38 @@ mod tests {
         // Total nodes: 1 input + 1 add op + 1 output = 3
         assert_eq!(graph.nodes().count(), 3);
     }
+
+    #[test]
+    fn lowers_subtraction_and_division() {
+        // Test subtraction
+        let graph = parse_and_lower("out1 = 5.0 - 2.0;").unwrap();
+        assert!(graph.nodes().count() > 0);
+        
+        // Test division
+        let graph = parse_and_lower("out1 = 10.0 / 2.0;").unwrap();
+        assert!(graph.nodes().count() > 0);
+    }
+
+    #[test]
+    fn lowers_modulo_operator() {
+        let graph = parse_and_lower("out1 = 5.0 % 2.0;").unwrap();
+        assert!(graph.nodes().count() > 0);
+    }
+
+    #[test]
+    fn lowers_comparison_operators() {
+        let cases = vec![
+            "out1 = 2.0 > 1.0;",
+            "out1 = 2.0 >= 1.0;",
+            "out1 = 1.0 < 2.0;",
+            "out1 = 1.0 <= 2.0;",
+            "out1 = 1.0 == 1.0;",
+            "out1 = 1.0 != 2.0;",
+        ];
+        
+        for src in cases {
+            let graph = parse_and_lower(src).unwrap();
+            assert!(graph.nodes().count() > 0, "Failed to lower: {}", src);
+        }
+    }
 }

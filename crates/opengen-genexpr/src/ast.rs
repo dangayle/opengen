@@ -31,6 +31,14 @@ pub enum BinOpKind {
     Sub,
     Mul,
     Div,
+    Mod,
+    // Comparison operators
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Eq,
+    Neq,
 }
 
 impl BinOpKind {
@@ -41,6 +49,13 @@ impl BinOpKind {
             BinOpKind::Sub => "sub",
             BinOpKind::Mul => "mul",
             BinOpKind::Div => "div",
+            BinOpKind::Mod => "mod",
+            BinOpKind::Gt => "gt",
+            BinOpKind::Gte => "gte",
+            BinOpKind::Lt => "lt",
+            BinOpKind::Lte => "lte",
+            BinOpKind::Eq => "eq",
+            BinOpKind::Neq => "neq",
         }
     }
 }
