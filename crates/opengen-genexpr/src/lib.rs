@@ -5,18 +5,24 @@ mod lexer;
 mod parser;
 mod lower;
 
-pub use ast::{Program, Statement, Expr, BinOpKind};
+pub use ast::{Program, Statement, StatementKind, Expr, BinOpKind, SourceLoc};
 pub use lower::{lower, LowerError};
 
 use opengen_ir::Graph;
 
-/// Parse error
+/// Parse error with optional source location.
 #[derive(Debug)]
-pub struct ParseError(pub String);
+pub struct ParseError {
+    pub msg: String,
+    pub loc: Option<SourceLoc>,
+}
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        match self.loc {
+            Some(loc) => write!(f, "{}:{}: {}", loc.line, loc.col, self.msg),
+            None => write!(f, "{}", self.msg),
+        }
     }
 }
 
@@ -24,8 +30,14 @@ impl std::error::Error for ParseError {}
 
 /// Parse GenExpr source code into an AST
 pub fn parse(src: &str) -> Result<Program, ParseError> {
-    let mut parser = parser::Parser::new(src).map_err(|e| ParseError(e))?;
-    parser.parse_program().map_err(|e| ParseError(e))
+    let mut parser = parser::Parser::new(src).map_err(|e| ParseError { msg: e, loc: None })?;
+    match parser.parse_program() {
+        Ok(prog) => Ok(prog),
+        Err(msg) => Err(ParseError {
+            msg,
+            loc: Some(parser.current_loc()),
+        }),
+    }
 }
 
 /// Combined parse and lower

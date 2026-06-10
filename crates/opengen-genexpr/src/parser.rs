@@ -8,17 +8,26 @@ use crate::lexer::{Lexer, Token};
 pub struct Parser {
     lexer: Lexer,
     current: Token,
+    current_loc: SourceLoc,
 }
 
 impl Parser {
     pub fn new(input: &str) -> Result<Self, String> {
         let mut lexer = Lexer::new(input);
-        let current = lexer.next_token()?;
-        Ok(Self { lexer, current })
+        let spanned = lexer.next_token()?;
+        Ok(Self { lexer, current: spanned.tok, current_loc: spanned.loc })
+    }
+
+    /// Return the location of the current (most recently consumed) token.
+    /// Used by the public `parse()` to attach location info to errors.
+    pub fn current_loc(&self) -> SourceLoc {
+        self.current_loc
     }
 
     fn advance(&mut self) -> Result<(), String> {
-        self.current = self.lexer.next_token()?;
+        let spanned = self.lexer.next_token()?;
+        self.current = spanned.tok;
+        self.current_loc = spanned.loc;
         Ok(())
     }
 
@@ -42,14 +51,15 @@ impl Parser {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, String> {
+        let loc = self.current_loc;
         match &self.current {
-            Token::Param => self.parse_param_decl(),
-            Token::Ident(_) => self.parse_assign(),
+            Token::Param => self.parse_param_decl(loc),
+            Token::Ident(_) => self.parse_assign(loc),
             _ => Err(format!("unexpected token at statement start: {:?}", self.current)),
         }
     }
 
-    fn parse_param_decl(&mut self) -> Result<Statement, String> {
+    fn parse_param_decl(&mut self, loc: SourceLoc) -> Result<Statement, String> {
         self.expect(Token::Param)?;
         
         let name = match &self.current {
@@ -69,10 +79,10 @@ impl Parser {
         self.expect(Token::RParen)?;
         self.expect(Token::Semicolon)?;
         
-        Ok(Statement::ParamDecl { name, default })
+        Ok(Statement { kind: StatementKind::ParamDecl { name, default }, loc })
     }
 
-    fn parse_assign(&mut self) -> Result<Statement, String> {
+    fn parse_assign(&mut self, loc: SourceLoc) -> Result<Statement, String> {
         let name = match &self.current {
             Token::Ident(s) => s.clone(),
             _ => return Err(format!("expected identifier, got {:?}", self.current)),
@@ -85,7 +95,7 @@ impl Parser {
         
         self.expect(Token::Semicolon)?;
         
-        Ok(Statement::Assign { name, expr })
+        Ok(Statement { kind: StatementKind::Assign { name, expr }, loc })
     }
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
@@ -246,8 +256,8 @@ mod tests {
         let mut parser = Parser::new("out1 = 42;").unwrap();
         let prog = parser.parse_program().unwrap();
         assert_eq!(prog.statements.len(), 1);
-        match &prog.statements[0] {
-            Statement::Assign { name, expr } => {
+        match &prog.statements[0].kind {
+            StatementKind::Assign { name, expr } => {
                 assert_eq!(name, "out1");
                 assert!(matches!(expr, Expr::Number(42.0)));
             }
@@ -259,8 +269,8 @@ mod tests {
     fn parses_binary_expression_with_precedence() {
         let mut parser = Parser::new("out1 = 1 + 2 * 3;").unwrap();
         let prog = parser.parse_program().unwrap();
-        match &prog.statements[0] {
-            Statement::Assign { expr, .. } => {
+        match &prog.statements[0].kind {
+            StatementKind::Assign { expr, .. } => {
                 // Should be Add(1, Mul(2, 3))
                 match expr {
                     Expr::BinOp { op: BinOpKind::Add, left, right } => {
@@ -284,8 +294,8 @@ mod tests {
     fn parses_param_declaration() {
         let mut parser = Parser::new("Param freq(440);").unwrap();
         let prog = parser.parse_program().unwrap();
-        match &prog.statements[0] {
-            Statement::ParamDecl { name, default } => {
+        match &prog.statements[0].kind {
+            StatementKind::ParamDecl { name, default } => {
                 assert_eq!(name, "freq");
                 assert_eq!(*default, 440.0);
             }
@@ -297,8 +307,8 @@ mod tests {
     fn parses_function_call() {
         let mut parser = Parser::new("out1 = cycle(freq);").unwrap();
         let prog = parser.parse_program().unwrap();
-        match &prog.statements[0] {
-            Statement::Assign { expr, .. } => {
+        match &prog.statements[0].kind {
+            StatementKind::Assign { expr, .. } => {
                 match expr {
                     Expr::Call { name, args } => {
                         assert_eq!(name, "cycle");
@@ -316,8 +326,8 @@ mod tests {
     fn parses_modulo_operator() {
         let mut parser = Parser::new("out1 = 5 % 2;").unwrap();
         let prog = parser.parse_program().unwrap();
-        match &prog.statements[0] {
-            Statement::Assign { expr, .. } => {
+        match &prog.statements[0].kind {
+            StatementKind::Assign { expr, .. } => {
                 match expr {
                     Expr::BinOp { op: BinOpKind::Mod, .. } => {}
                     _ => panic!("expected modulo operation"),
@@ -341,8 +351,8 @@ mod tests {
         for (src, expected_op) in cases {
             let mut parser = Parser::new(src).unwrap();
             let prog = parser.parse_program().unwrap();
-            match &prog.statements[0] {
-                Statement::Assign { expr, .. } => {
+            match &prog.statements[0].kind {
+                StatementKind::Assign { expr, .. } => {
                     match expr {
                         Expr::BinOp { op, .. } => {
                             assert_eq!(*op, expected_op, "Failed for: {}", src);
@@ -359,8 +369,8 @@ mod tests {
     fn comparison_has_lower_precedence_than_arithmetic() {
         let mut parser = Parser::new("out1 = 1 + 2 > 3;").unwrap();
         let prog = parser.parse_program().unwrap();
-        match &prog.statements[0] {
-            Statement::Assign { expr, .. } => {
+        match &prog.statements[0].kind {
+            StatementKind::Assign { expr, .. } => {
                 // Should be Gt(Add(1, 2), 3)
                 match expr {
                     Expr::BinOp { op: BinOpKind::Gt, left, right } => {

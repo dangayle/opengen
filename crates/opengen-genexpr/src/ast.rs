@@ -1,12 +1,27 @@
-//! AST for GenExpr language (M1 subset)
+//! AST for GenExpr language
+
+/// Source location (1-indexed line and column)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceLoc {
+    pub line: u32,
+    pub col: u32,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub statements: Vec<Statement>,
 }
 
+/// A statement with its source location.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Statement {
+pub struct Statement {
+    pub kind: StatementKind,
+    pub loc: SourceLoc,
+}
+
+/// The inner kind of a statement, without location.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatementKind {
     /// Param name(default);
     ParamDecl { name: String, default: f64 },
     /// ident = expr;

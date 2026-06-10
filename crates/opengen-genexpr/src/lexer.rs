@@ -1,5 +1,14 @@
 //! Hand-written lexer for GenExpr
 
+use crate::ast::SourceLoc;
+
+/// A token with its source location.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Spanned {
+    pub tok: Token,
+    pub loc: SourceLoc,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Number(f64),
@@ -31,6 +40,8 @@ pub enum Token {
 pub struct Lexer {
     input: Vec<char>,
     pos: usize,
+    line: u32,
+    col: u32,
 }
 
 impl Lexer {
@@ -38,6 +49,8 @@ impl Lexer {
         Self {
             input: input.chars().collect(),
             pos: 0,
+            line: 1,
+            col: 1,
         }
     }
 
@@ -46,6 +59,16 @@ impl Lexer {
     }
 
     fn advance(&mut self) {
+        match self.current() {
+            Some('\n') => {
+                self.line += 1;
+                self.col = 1;
+            }
+            Some(_) => {
+                self.col += 1;
+            }
+            None => {}
+        }
         self.pos += 1;
     }
 
@@ -59,22 +82,23 @@ impl Lexer {
         }
     }
 
-    pub fn next_token(&mut self) -> Result<Token, String> {
+    pub fn next_token(&mut self) -> Result<Spanned, String> {
         self.skip_whitespace();
+        let start_loc = SourceLoc { line: self.line, col: self.col };
 
         let ch = match self.current() {
             Some(c) => c,
-            None => return Ok(Token::Eof),
+            None => return Ok(Spanned { tok: Token::Eof, loc: start_loc }),
         };
 
         // Numbers
         if ch.is_ascii_digit() || (ch == '.' && self.peek_is_digit()) {
-            return self.read_number();
+            return self.read_number_with_loc(start_loc);
         }
 
         // Identifiers and keywords
         if ch.is_alphabetic() || ch == '_' {
-            return self.read_ident_or_keyword();
+            return self.read_ident_or_keyword_with_loc(start_loc);
         }
 
         // Multi-character operators
@@ -82,56 +106,57 @@ impl Lexer {
             self.advance();
             if self.current() == Some('=') {
                 self.advance();
-                return Ok(Token::Gte);
+                return Ok(Spanned { tok: Token::Gte, loc: start_loc });
             }
-            return Ok(Token::Gt);
+            return Ok(Spanned { tok: Token::Gt, loc: start_loc });
         }
         if ch == '<' {
             self.advance();
             if self.current() == Some('=') {
                 self.advance();
-                return Ok(Token::Lte);
+                return Ok(Spanned { tok: Token::Lte, loc: start_loc });
             }
-            return Ok(Token::Lt);
+            return Ok(Spanned { tok: Token::Lt, loc: start_loc });
         }
         if ch == '=' {
             self.advance();
             if self.current() == Some('=') {
                 self.advance();
-                return Ok(Token::EqualEqual);
+                return Ok(Spanned { tok: Token::EqualEqual, loc: start_loc });
             }
-            return Ok(Token::Equals);
+            return Ok(Spanned { tok: Token::Equals, loc: start_loc });
         }
         if ch == '!' {
             self.advance();
             if self.current() == Some('=') {
                 self.advance();
-                return Ok(Token::BangEqual);
+                return Ok(Spanned { tok: Token::BangEqual, loc: start_loc });
             }
             return Err("unexpected '!' (did you mean '!='?)".to_string());
         }
 
         // Single-character punctuation
         self.advance();
-        match ch {
-            '(' => Ok(Token::LParen),
-            ')' => Ok(Token::RParen),
-            ';' => Ok(Token::Semicolon),
-            ',' => Ok(Token::Comma),
-            '+' => Ok(Token::Plus),
-            '-' => Ok(Token::Minus),
-            '*' => Ok(Token::Star),
-            '/' => Ok(Token::Slash),
-            '%' => Ok(Token::Percent),
-            _ => Err(format!("unexpected character: '{}'", ch)),
-        }
+        let tok = match ch {
+            '(' => Token::LParen,
+            ')' => Token::RParen,
+            ';' => Token::Semicolon,
+            ',' => Token::Comma,
+            '+' => Token::Plus,
+            '-' => Token::Minus,
+            '*' => Token::Star,
+            '/' => Token::Slash,
+            '%' => Token::Percent,
+            _ => return Err(format!("unexpected character: '{}'", ch)),
+        };
+        Ok(Spanned { tok, loc: start_loc })
     }
 
     fn peek_is_digit(&self) -> bool {
         self.input.get(self.pos + 1).map_or(false, |c| c.is_ascii_digit())
     }
 
-    fn read_number(&mut self) -> Result<Token, String> {
+    fn read_number_with_loc(&mut self, start_loc: SourceLoc) -> Result<Spanned, String> {
         let start = self.pos;
         
         // Integer part
@@ -156,12 +181,13 @@ impl Lexer {
         }
 
         let num_str: String = self.input[start..self.pos].iter().collect();
-        num_str.parse::<f64>()
+        let tok = num_str.parse::<f64>()
             .map(Token::Number)
-            .map_err(|e| format!("invalid number: {}", e))
+            .map_err(|e| format!("invalid number: {}", e))?;
+        Ok(Spanned { tok, loc: start_loc })
     }
 
-    fn read_ident_or_keyword(&mut self) -> Result<Token, String> {
+    fn read_ident_or_keyword_with_loc(&mut self, start_loc: SourceLoc) -> Result<Spanned, String> {
         let start = self.pos;
         
         while let Some(ch) = self.current() {
@@ -175,10 +201,11 @@ impl Lexer {
         let ident: String = self.input[start..self.pos].iter().collect();
         
         // Check for keywords
-        match ident.as_str() {
-            "Param" => Ok(Token::Param),
-            _ => Ok(Token::Ident(ident)),
-        }
+        let tok = match ident.as_str() {
+            "Param" => Token::Param,
+            _ => Token::Ident(ident),
+        };
+        Ok(Spanned { tok, loc: start_loc })
     }
 }
 
@@ -189,31 +216,31 @@ mod tests {
     #[test]
     fn tokenizes_numbers() {
         let mut lex = Lexer::new("42 3.14 0.5");
-        assert_eq!(lex.next_token().unwrap(), Token::Number(42.0));
-        assert_eq!(lex.next_token().unwrap(), Token::Number(3.14));
-        assert_eq!(lex.next_token().unwrap(), Token::Number(0.5));
-        assert_eq!(lex.next_token().unwrap(), Token::Eof);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Number(42.0));
+        assert_eq!(lex.next_token().unwrap().tok, Token::Number(3.14));
+        assert_eq!(lex.next_token().unwrap().tok, Token::Number(0.5));
+        assert_eq!(lex.next_token().unwrap().tok, Token::Eof);
     }
 
     #[test]
     fn tokenizes_identifiers_and_keywords() {
         let mut lex = Lexer::new("Param freq out1");
-        assert_eq!(lex.next_token().unwrap(), Token::Param);
-        assert_eq!(lex.next_token().unwrap(), Token::Ident("freq".to_string()));
-        assert_eq!(lex.next_token().unwrap(), Token::Ident("out1".to_string()));
+        assert_eq!(lex.next_token().unwrap().tok, Token::Param);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Ident("freq".to_string()));
+        assert_eq!(lex.next_token().unwrap().tok, Token::Ident("out1".to_string()));
     }
 
     #[test]
     fn tokenizes_punctuation() {
         let mut lex = Lexer::new("( ) ; , = + - * /");
-        assert_eq!(lex.next_token().unwrap(), Token::LParen);
-        assert_eq!(lex.next_token().unwrap(), Token::RParen);
-        assert_eq!(lex.next_token().unwrap(), Token::Semicolon);
-        assert_eq!(lex.next_token().unwrap(), Token::Comma);
-        assert_eq!(lex.next_token().unwrap(), Token::Equals);
-        assert_eq!(lex.next_token().unwrap(), Token::Plus);
-        assert_eq!(lex.next_token().unwrap(), Token::Minus);
-        assert_eq!(lex.next_token().unwrap(), Token::Star);
-        assert_eq!(lex.next_token().unwrap(), Token::Slash);
+        assert_eq!(lex.next_token().unwrap().tok, Token::LParen);
+        assert_eq!(lex.next_token().unwrap().tok, Token::RParen);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Semicolon);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Comma);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Equals);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Plus);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Minus);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Star);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Slash);
     }
 }

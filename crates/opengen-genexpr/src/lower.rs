@@ -6,11 +6,17 @@ use opengen_ops::Registry;
 use std::collections::HashMap;
 
 #[derive(Debug)]
-pub struct LowerError(pub String);
+pub struct LowerError {
+    pub msg: String,
+    pub loc: Option<SourceLoc>,
+}
 
 impl std::fmt::Display for LowerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        match self.loc {
+            Some(loc) => write!(f, "{}:{}: {}", loc.line, loc.col, self.msg),
+            None => write!(f, "{}", self.msg),
+        }
     }
 }
 
@@ -40,8 +46,15 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_statement(&mut self, stmt: &Statement) -> Result<(), LowerError> {
-        match stmt {
-            Statement::ParamDecl { name, default } => {
+        let stmt_loc = stmt.loc;
+        self.try_lower_statement(stmt)
+            .map_err(|e| LowerError { msg: e.msg, loc: Some(stmt_loc) })
+    }
+
+    /// Inner helper that uses `?` freely; `lower_statement` wraps errors with statement location.
+    fn try_lower_statement(&mut self, stmt: &Statement) -> Result<(), LowerError> {
+        match &stmt.kind {
+            StatementKind::ParamDecl { name, default } => {
                 let node_id = self.graph.add_node(Node::param(name, *default));
                 let port = Port { node: node_id, index: 0 };
                 self.bindings.insert(name.clone(), port);
@@ -49,7 +62,7 @@ impl<'a> Lowerer<'a> {
                 self.graph.bind(name.clone(), node_id);
                 Ok(())
             }
-            Statement::Assign { name, expr } => {
+            StatementKind::Assign { name, expr } => {
                 // Check if this is a stateful self-reference pattern
                 let is_stateful_self_ref = self.is_stateful_self_reference(name, expr);
                 
@@ -110,7 +123,7 @@ impl<'a> Lowerer<'a> {
         // Pre-create the op node and pre-bind it
         if let Expr::Call { name: op_name, args } = expr {
             let op_def = self.registry.get(op_name)
-                .ok_or_else(|| LowerError(format!("unknown operator: {}", op_name)))?;
+                .ok_or_else(|| LowerError { msg: format!("unknown operator: {}", op_name), loc: None })?;
             
             // Create the op node
             let op_node = self.graph.add_node(Node::op(op_name, vec![], op_def.state));
@@ -126,10 +139,13 @@ impl<'a> Lowerer<'a> {
             
             // Now lower arguments (which can reference the name)
             if args.len() != op_def.arity as usize {
-                return Err(LowerError(format!(
-                    "operator '{}' expects {} arguments, got {}",
-                    op_name, op_def.arity, args.len()
-                )));
+                return Err(LowerError {
+                    msg: format!(
+                        "operator '{}' expects {} arguments, got {}",
+                        op_name, op_def.arity, args.len()
+                    ),
+                    loc: None,
+                });
             }
             
             for (i, arg) in args.iter().enumerate() {
@@ -175,12 +191,12 @@ impl<'a> Lowerer<'a> {
                 // Look up in bindings
                 self.bindings.get(name)
                     .copied()
-                    .ok_or_else(|| LowerError(format!("undefined identifier: {}", name)))
+                    .ok_or_else(|| LowerError { msg: format!("undefined identifier: {}", name), loc: None })
             }
             Expr::BinOp { op, left, right } => {
                 let op_name = op.op_name();
                 let op_def = self.registry.get(op_name)
-                    .ok_or_else(|| LowerError(format!("unknown binary operator: {}", op_name)))?;
+                    .ok_or_else(|| LowerError { msg: format!("unknown binary operator: {}", op_name), loc: None })?;
                 
                 let left_port = self.lower_expr(left)?;
                 let right_port = self.lower_expr(right)?;
@@ -199,7 +215,7 @@ impl<'a> Lowerer<'a> {
                 let expr_port = self.lower_expr(e)?;
                 
                 let sub_def = self.registry.get("sub")
-                    .ok_or_else(|| LowerError("'sub' operator not available (needed for unary minus)".to_string()))?;
+                    .ok_or_else(|| LowerError { msg: "'sub' operator not available (needed for unary minus)".to_string(), loc: None })?;
                 
                 let sub_node = self.graph.add_node(Node::op("sub", vec![], sub_def.state));
                 self.graph.connect(zero_port, Port { node: sub_node, index: 0 });
@@ -209,13 +225,16 @@ impl<'a> Lowerer<'a> {
             }
             Expr::Call { name, args } => {
                 let op_def = self.registry.get(name)
-                    .ok_or_else(|| LowerError(format!("unknown function: {}", name)))?;
+                    .ok_or_else(|| LowerError { msg: format!("unknown function: {}", name), loc: None })?;
                 
                 if args.len() != op_def.arity as usize {
-                    return Err(LowerError(format!(
-                        "function '{}' expects {} arguments, got {}",
-                        name, op_def.arity, args.len()
-                    )));
+                    return Err(LowerError {
+                        msg: format!(
+                            "function '{}' expects {} arguments, got {}",
+                            name, op_def.arity, args.len()
+                        ),
+                        loc: None,
+                    });
                 }
                 
                 let op_node = self.graph.add_node(Node::op(name, vec![], op_def.state));
