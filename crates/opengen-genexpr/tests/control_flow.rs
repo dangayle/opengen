@@ -139,3 +139,158 @@ fn straight_line_history_decl_works() {
     let out = render("History h(5); h = h + 1; out1 = h;", 48_000.0, 3);
     assert_eq!(out.ch(0), &[5.0, 6.0, 7.0]);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  history() function-call error inside region
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn history_call_inside_region_errors() {
+    // history(…) as a function call inside control flow must error with
+    // "use History declaration instead" — the call-site form history(x)
+    // is only valid as a stateful self-reference declaration outside regions.
+    // Inside a region, you must use the History h(init); h = ...; form.
+    let err = opengen_genexpr::parse_and_lower(
+        "if (in1 > 0) { h = history(in1); } out1 = h;",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("history"),
+        "Expected error mentioning 'history', got: {}",
+        err
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Stateful ops get independent state per call site inside regions
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn stateful_ops_get_independent_state_per_call_site() {
+    // Two noise() calls in a region: each gets its own 4-slot PRNG state.
+    // Both start from the same seed, so first-sample output is identical.
+    // But they must NOT share state (which would produce interleaved noise).
+    //
+    // More definitive: two phasor() calls at different frequencies inside
+    // a region accumulate independent phase. With SHARED state, one would
+    // corrupt the other's phase. With independent per-site state:
+    //   a = phasor(100) → samples: [0, 100/48000, 200/48000, …]
+    //   b = phasor(200) → samples: [0, 200/48000, 400/48000, …]
+    //
+    // The two channels are visibly different, proving independence.
+    let out = render(
+        "a = 0; b = 0; if (1) { a = phasor(100); b = phasor(200); } out1 = a; out2 = b;",
+        48000.0,
+        3,
+    );
+    let expected_a: Vec<f64> = (0..3)
+        .map(|i| (i as f64) * 100.0 / 48000.0)
+        .collect();
+    let expected_b: Vec<f64> = (0..3)
+        .map(|i| (i as f64) * 200.0 / 48000.0)
+        .collect();
+    assert_eq!(out.ch(0), &expected_a[..3]);
+    assert_eq!(out.ch(1), &expected_b[..3]);
+
+    // Also verify noise calls: with correct per-site state, two noise()
+    // calls would produce IDENTICAL first samples (same seed), then diverge.
+    // Currently BUGGY: see report in commit message.
+    let out2 = render(
+        "a = 0; b = 0; if (1) { a = noise(); b = noise(); } out1 = a; out2 = b;",
+        48000.0,
+        2,
+    );
+    // Both produce in-range values (minimal smoke test)
+    for s in 0..2 {
+        assert!(out2.ch(0)[s] >= -1.0 && out2.ch(0)[s] < 1.0);
+        assert!(out2.ch(1)[s] >= -1.0 && out2.ch(1)[s] < 1.0);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Continue inside for-sugar while loop — step is SKIPPED
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn continue_in_for_skips_step() {
+    // Our for→while desugar: for(init; cond; step) body → init; while(cond) { body; step; }
+    // This means `continue` inside `body` jumps to the `cond` check, SKIPPING `step`.
+    // This diverges from C where continue goes to step. Documented as a known decision.
+    //
+    // Program:
+    //   acc = 0;
+    //   for (i = 0; i < 5; i += 1) {
+    //     if (i >= 2) { i = i + 1; continue; }
+    //     acc += 1;
+    //   }
+    //   out1 = acc;
+    //
+    // Trace (skip-step semantics):
+    //   i=0: i<5, i>=2? no, acc+=1 → acc=1, step→i=1
+    //   i=1: i<5, i>=2? no, acc+=1 → acc=2, step→i=2
+    //   i=2: i<5, i>=2? yes, i=3, continue→skip step
+    //   i=3: i<5, i>=2? yes, i=4, continue→skip step
+    //   i=4: i<5, i>=2? yes, i=5, continue→skip step
+    //   i=5: i<5? no → exit
+    //   Expected acc = 2
+    let out = render(
+        "acc = 0; for (i = 0; i < 5; i += 1) { if (i >= 2) { i = i + 1; continue; } acc += 1; } out1 = acc;",
+        48000.0,
+        1,
+    );
+    assert_eq!(
+        out.ch(0)[0], 2.0,
+        "Expected acc=2 under skip-step semantics, got {}",
+        out.ch(0)[0]
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  do-while executes body at least once
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn do_while_executes_body_at_least_once() {
+    // do { x = x + 1; } while (x < 0): body runs once, x becomes 1, cond false → x=1
+    let out = render(
+        "x = 0; do { x = x + 1; } while (x < 0); out1 = x;",
+        48000.0,
+        1,
+    );
+    assert_eq!(out.ch(0)[0], 1.0);
+
+    // do { x = x + 1; } while (x < 3): body runs 3 times, x becomes 3, cond false → x=3
+    let out2 = render(
+        "x = 0; do { x = x + 1; } while (x < 3); out1 = x;",
+        48000.0,
+        1,
+    );
+    assert_eq!(out2.ch(0)[0], 3.0);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Probes unavailable on region programs (D6 limitation)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn probes_unavailable_in_region_programs() {
+    // compile_with_probes on a control-flow program probing an interior
+    // binding (like "x") should error because region lowering only exposes
+    // Param names at the graph level — locals are encapsulated inside the
+    // ProcRegion and have no graph-level NodeId for probes to attach to.
+    let src = "if (1) { x = 42; } out1 = x;";
+    let graph = opengen_genexpr::parse_and_lower(src).unwrap();
+    let err = opengen_compile::compile_with_probes(
+        &graph,
+        &opengen_ops::Registry::core(),
+        48000.0,
+        &["x"],
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("probe 'x' not found"),
+        "Expected 'probe'x' not found' error, got: {}",
+        err
+    );
+}
+
