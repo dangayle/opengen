@@ -45,6 +45,8 @@ impl<'a> Lowerer<'a> {
                 let node_id = self.graph.add_node(Node::param(name, *default));
                 let port = Port { node: node_id, index: 0 };
                 self.bindings.insert(name.clone(), port);
+                // Record user-visible param binding in graph
+                self.graph.bind(name.clone(), node_id);
                 Ok(())
             }
             Statement::Assign { name, expr } => {
@@ -67,6 +69,11 @@ impl<'a> Lowerer<'a> {
                     
                     // Bind the name (allows re-use in later expressions)
                     self.bindings.insert(name.clone(), port);
+                    
+                    // Record user-visible binding in graph (exclude outputs and synthetic names)
+                    if !is_synthetic_name(name) && parse_output_name(name).is_none() {
+                        self.graph.bind(name.clone(), port.node);
+                    }
                     Ok(())
                 }
             }
@@ -111,6 +118,11 @@ impl<'a> Lowerer<'a> {
             
             // Pre-bind the name
             self.bindings.insert(name.to_string(), op_port);
+            
+            // Record user-visible binding in graph (exclude outputs and synthetic names)
+            if !is_synthetic_name(name) && parse_output_name(name).is_none() {
+                self.graph.bind(name.to_string(), op_node);
+            }
             
             // Now lower arguments (which can reference the name)
             if args.len() != op_def.arity as usize {
@@ -235,6 +247,11 @@ fn parse_input_name(name: &str) -> Option<u16> {
     } else {
         None
     }
+}
+
+/// Check if a name is synthetic (internal, not user-visible)
+fn is_synthetic_name(name: &str) -> bool {
+    name.starts_with("__")
 }
 
 pub fn lower(program: &Program) -> Result<Graph, LowerError> {

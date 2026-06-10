@@ -45,6 +45,8 @@ pub struct Graph {
     nodes: Vec<Node>,
     /// dest port -> source port
     edges: std::collections::HashMap<Port, Port>,
+    /// User-visible bindings: identifier name -> node
+    bindings: std::collections::HashMap<String, NodeId>,
 }
 
 impl Graph {
@@ -59,6 +61,15 @@ impl Graph {
         self.nodes.iter().enumerate().map(|(i, n)| (NodeId(i as u32), n))
     }
     pub fn input_of(&self, p: Port) -> Option<Port> { self.edges.get(&p).copied() }
+    
+    /// Bind a name to a node (for user-visible variables)
+    pub fn bind(&mut self, name: String, id: NodeId) { self.bindings.insert(name, id); }
+    
+    /// Look up a binding by name
+    pub fn binding(&self, name: &str) -> Option<NodeId> { self.bindings.get(name).copied() }
+    
+    /// Iterator over all bindings
+    pub fn bindings(&self) -> impl Iterator<Item = (&String, &NodeId)> { self.bindings.iter() }
 }
 
 #[cfg(test)]

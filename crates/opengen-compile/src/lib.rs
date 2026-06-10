@@ -40,12 +40,19 @@ pub struct Patch {
     state: Vec<f64>,        // flat state arena
     outputs: Vec<usize>,    // value slots feeding Output nodes, by output index
     sr: f64,
+    /// Probe storage: maps probe name to (value_slot, recorded_samples)
+    probes: HashMap<String, (usize, Vec<f64>)>,
 }
 
 impl Patch {
     /// Returns the number of output channels.
     pub fn output_count(&self) -> usize {
         self.outputs.len()
+    }
+    
+    /// Get recorded probe samples by name
+    pub fn probe(&self, name: &str) -> Option<&[f64]> {
+        self.probes.get(name).map(|(_, samples)| samples.as_slice())
     }
 
     /// Process one sample frame. Deterministic order = topo order (ties broken by NodeId).
@@ -71,12 +78,45 @@ impl Patch {
             }
         }
         
+        // Capture probe samples (after all steps run)
+        for (_, (value_slot, samples)) in self.probes.iter_mut() {
+            samples.push(self.values[*value_slot]);
+        }
+        
         // Gather outputs
         self.outputs.iter().map(|&slot| self.values[slot]).collect()
     }
 }
 
 pub fn compile(g: &Graph, reg: &Registry, sr: f64) -> Result<Patch, CompileError> {
+    compile_impl(g, reg, sr, &[])
+}
+
+pub fn compile_with_probes(
+    g: &Graph,
+    reg: &Registry,
+    sr: f64,
+    probe_names: &[&str],
+) -> Result<Patch, CompileError> {
+    compile_impl(g, reg, sr, probe_names)
+}
+
+fn compile_impl(
+    g: &Graph,
+    reg: &Registry,
+    sr: f64,
+    probe_names: &[&str],
+) -> Result<Patch, CompileError> {
+    // Resolve probe names to NodeIds
+    let mut probes: HashMap<String, (usize, Vec<f64>)> = HashMap::new();
+    for &name in probe_names {
+        let node_id = g.binding(name).ok_or_else(|| {
+            CompileError(format!("probe '{}' not found in graph bindings", name))
+        })?;
+        let value_slot = node_id.0 as usize;
+        probes.insert(name.to_string(), (value_slot, Vec::new()));
+    }
+    
     let node_count = g.nodes().count();
     
     // Allocate value slots (one per node) and state arena
@@ -282,10 +322,10 @@ pub fn compile(g: &Graph, reg: &Registry, sr: f64) -> Result<Patch, CompileError
         for (&idx, &slot) in &outputs_map {
             outputs[idx as usize] = slot;
         }
-        Ok(Patch { steps, values, state, outputs, sr })
+        Ok(Patch { steps, values, state, outputs, sr, probes: probes.clone() })
     } else {
         // No outputs: empty graph is valid
-        Ok(Patch { steps, values, state, outputs: vec![], sr })
+        Ok(Patch { steps, values, state, outputs: vec![], sr, probes })
     }
 }
 
