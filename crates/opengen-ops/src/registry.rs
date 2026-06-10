@@ -18,6 +18,7 @@ impl Registry {
         for def in crate::math::defs() { ops.insert(def.name, def); }
         for def in crate::compare::defs() { ops.insert(def.name, def); }
         for def in crate::range::defs() { ops.insert(def.name, def); }
+        for def in crate::state::defs() { ops.insert(def.name, def); }
         Registry { ops }
     }
     pub fn get(&self, name: &str) -> Option<&OpDef> { self.ops.get(name) }

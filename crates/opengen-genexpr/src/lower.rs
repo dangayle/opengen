@@ -328,4 +328,18 @@ mod tests {
             assert!(graph.nodes().count() > 0, "Failed to lower: {}", src);
         }
     }
+
+    #[test]
+    fn rejects_stateless_self_reference() {
+        // Direct self-reference without stateful operator (e.g., history) must error
+        let err = parse_and_lower("x = x + 1; out1 = x;").unwrap_err();
+        assert!(err.contains("undefined identifier"), "Expected 'undefined identifier', got: {}", err);
+    }
+
+    #[test]
+    fn allows_stateful_self_reference() {
+        // Self-reference through stateful operator (history) is valid
+        let graph = parse_and_lower("h = history(h + 1); out1 = h;").unwrap();
+        assert!(graph.nodes().count() > 0);
+    }
 }
