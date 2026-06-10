@@ -146,8 +146,16 @@ impl<'a> Lowerer<'a> {
             Expr::Ident(name) => {
                 // Check for input nodes (in1, in2, ...)
                 if let Some(input_index) = parse_input_name(name) {
+                    // Check if we've already created an Input node for this identifier
+                    if let Some(port) = self.bindings.get(name) {
+                        return Ok(*port);
+                    }
+                    
+                    // Create the Input node and cache it
                     let node_id = self.graph.add_node(Node::input(input_index));
-                    return Ok(Port { node: node_id, index: 0 });
+                    let port = Port { node: node_id, index: 0 };
+                    self.bindings.insert(name.clone(), port);
+                    return Ok(port);
                 }
                 
                 // Look up in bindings
@@ -267,5 +275,21 @@ mod tests {
     fn resolves_param_reference() {
         let graph = parse_and_lower("Param freq(440); out1 = freq;").unwrap();
         assert_eq!(graph.nodes().count(), 2); // param + output
+    }
+
+    #[test]
+    fn reuses_input_node_across_references() {
+        let graph = parse_and_lower("out1 = in1 + in1;").unwrap();
+        
+        // Count Input nodes in the graph
+        let input_count = graph.nodes()
+            .filter(|(_, node)| matches!(node.kind, opengen_ir::NodeKind::Input(_)))
+            .count();
+        
+        // Should have exactly ONE Input node, not two
+        assert_eq!(input_count, 1, "Expected 1 Input node, got {}", input_count);
+        
+        // Total nodes: 1 input + 1 add op + 1 output = 3
+        assert_eq!(graph.nodes().count(), 3);
     }
 }
