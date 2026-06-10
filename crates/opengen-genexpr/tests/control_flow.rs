@@ -310,3 +310,45 @@ fn probes_unavailable_in_region_programs() {
     );
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  Walk-order alignment: metadata collection and lowering must visit
+//  stateful ops in the SAME order so positional state_base is correct.
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn dowhile_with_stateful_cond_keeps_per_site_state() {
+    // noise (size 4) in body, phasor (size 1) in cond.
+    // Buggy metadata (cond-first) would register phasor before noise;
+    // lowering visits body-first (noise) and maps to the wrong state_base.
+    // The assert_eq guard would catch "phasor" != "noise" and panic.
+    // After fix (body-first in metadata), both passes agree.
+    //
+    // do-while executes body unconditionally once, then checks cond.
+    // phasor(200) < -1 is always false (phasor outputs [0,1)).
+    let src = "a = 0;\ndo { a = noise(); } while (phasor(200) < 0 - 1);\nout1 = a;";
+    // Should not panic: correct per-call-site state.
+    let out = opengen_testkit::render(src, 48_000.0, 1);
+    // noise() returns [-1, 1); phasor/cond doesn't affect `a`.
+    assert!(out.ch(0)[0] >= -1.0 && out.ch(0)[0] < 1.0,
+        "noise output out of range: {}", out.ch(0)[0]);
+}
+
+#[test]
+fn for_with_stateful_step_keeps_per_site_state() {
+    // phasor (size 1) in body, noise (size 4) in step expression.
+    // Buggy metadata (step-first) would register noise before phasor;
+    // lowering visits body-first (phasor) and maps to the wrong state_base.
+    // After fix (body-before-step in metadata), both passes agree.
+    //
+    // step = i += 1 + noise() * 0  →  effective i += 1 (noise()*0 = 0)
+    // Loop runs i=0,1,2. Each iter body: a = phasor(440).
+    let src = "for (i = 0; i < 3; i += 1 + noise() * 0) { a = phasor(440); } out1 = a;";
+    let out = opengen_testkit::render(src, 48_000.0, 1);
+    // Body phasor(440) runs 3 times within sample 0:
+    //   iter 0: phase=0,      out=0
+    //   iter 1: phase=440/48000,   out=440/48000
+    //   iter 2: phase=880/48000,  out=880/48000
+    let expected = 2.0 * 440.0 / 48000.0;
+    assert_eq!(out.ch(0)[0], expected);
+}
+

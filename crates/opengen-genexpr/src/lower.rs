@@ -206,7 +206,7 @@ impl RegionMeta {
     }
 
     fn n_outputs(&self) -> u16 {
-        if self.outputs.is_empty() { 0 } else { self.outputs.iter().max().unwrap() + 1 }
+        self.outputs.iter().max().map(|m| m + 1).unwrap_or(0)
     }
 }
 
@@ -301,6 +301,7 @@ impl<'a> Lowerer<'a> {
         // Pre-populate input_port_of: Param name → region input port, inN → region input port.
         let mut input_port_of: HashMap<String, u16> = HashMap::new();
         for (name, _) in &meta.params {
+            // param_port returns Some for any name that was registered by add_param.
             input_port_of.insert(name.clone(), meta.param_port(name).unwrap());
         }
         for &in_idx in &meta.in_refs {
@@ -438,17 +439,26 @@ impl<'a> Lowerer<'a> {
                 Ok(())
             }
             StatementKind::DoWhile { body, cond } => {
-                self.collect_meta_from_expr(cond, meta);
+                // Walk order MUST match lowering: body first, then cond.
+                // The lowering desugar visits body expressions before cond expressions
+                // (body; while(cond) { body; }), so metadata must collect in the same
+                // order to keep positional state_base indices aligned.
                 self.collect_region_meta(body, meta)?;
+                self.collect_meta_from_expr(cond, meta);
                 Ok(())
             }
             StatementKind::For { init, cond, step, body } => {
+                // Walk order MUST match lowering: init, cond, body, step.
+                // The lowering desugar is init; while(cond) { body; step; } —
+                // it visits init, cond, body, then step. Metadata must collect
+                // in this exact order for positional state_base alignment.
                 if let Some(init_stmt) = init {
                     self.collect_region_meta(init_stmt, meta)?;
                 }
                 if let Some(cond_expr) = cond {
                     self.collect_meta_from_expr(cond_expr, meta);
                 }
+                self.collect_region_meta(body, meta)?;
                 if let Some(step_expr) = step {
                     // For the step expression, treat it as a potential compound-assignment
                     // to a local: if step is a BinOp with Ident on left, the target gets a local slot.
@@ -461,7 +471,6 @@ impl<'a> Lowerer<'a> {
                     }
                     self.collect_meta_from_expr(step_expr, meta);
                 }
-                self.collect_region_meta(body, meta)?;
                 Ok(())
             }
             StatementKind::Block(stmts) => {
@@ -918,19 +927,32 @@ impl<'a> Lowerer<'a> {
                 // This avoids the bug of matching structurally identical calls
                 // (e.g. two noise() calls) via `find` + structural equality, which
                 // would share state across call sites.
+                //
+                // The positional guard below is a BEST-EFFORT name check, not
+                // structural proof. Two calls to the same operator (e.g. two phasor
+                // calls at different frequencies) have the same op name and would
+                // slip past the check but still get the correct state_base slot
+                // (the positional index determines the slot, not the name). The
+                // check catches the programmer error where an entirely different
+                // operator appears at a given position (e.g. metadata collected
+                // noise but lowering visits phasor), which indicates a structural
+                // walk-order mismatch between the two passes.
                 let state_base = if op_def.state != StateDecl::None {
                     let idx = self.region_stateful_idx.get();
                     self.region_stateful_idx.set(idx + 1);
                     if let Some(info) = meta.stateful_ops.get(idx) {
-                        // Defensive: verify walk-order agreement by checking the op name.
+                        // Best-effort guard: verify walk-order agreement by checking the op name.
                         if let Expr::Call { name: info_name, .. } = &info.expr {
-                            assert_eq!(
-                                info_name, name,
-                                "stateful op name mismatch at position {}: \
-                                 metadata collected '{}' but lowering '{}' — 
-                                 AST walk order inconsistency",
-                                idx, info_name, name
-                            );
+                            if info_name != name {
+                                return Err(LowerError {
+                                    msg: format!(
+                                        "internal: stateful op walk-order mismatch at position {}: \
+                                         expected '{}', found '{}'",
+                                        idx, info_name, name
+                                    ),
+                                    loc: None,
+                                });
+                            }
                         }
                         meta.histories.len() as u32 + info.state_base
                     } else {
