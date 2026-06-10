@@ -233,17 +233,73 @@ fn peek_poke_inside_if_with_true_cond() {
 
 #[test]
 fn data_persists_across_samples() {
-    // Data retains values between samples
+    // Data retains values between samples.
+    // Use render_with_inputs to explicitly control in1 per sample:
+    //   Sample 0: in1=5.0 -> poke(d, 5.0, 0)
+    //   Sample 1: in1=0.0 -> no poke, peek returns 5.0 (persisted)
+    //   Sample 2: in1=0.0 -> no poke, peek returns 5.0 (persisted)
+    //   Sample 3: in1=3.0 -> poke(d, 3.0, 0), peek returns 3.0 (overwritten)
     let src = "Data d(4); \
-               Param clock(0); \
-               if (clock > 0) { poke(d, clock, 0); } \
-               out1 = peek(d, 0); \
-               if (clock > 0) { out2 = peek(d, 0); }";
-    let out = render(src, 48000.0, 3);
-    // Sample 0: clock=0 (default Param), no poke, read 0
-    assert_eq!(out.ch(0)[0], 0.0);
-    // Don't assert samples 1+ since Param control in testkit isn't straightforward.
-    // This test verifies the graph compiles and runs without error.
+               if (in1 > 0) { poke(d, in1, 0); } \
+               out1 = peek(d, 0);";
+    let out = opengen_testkit::render_with_inputs(src, 48000.0, &[&[5.0, 0.0, 0.0, 3.0]]);
+    // Sample 0: in1=5, poke writes 5, peek returns 5
+    assert_eq!(out.ch(0)[0], 5.0, "sample 0: poke then peek should return 5");
+    // Sample 1: in1=0, no poke, peek returns persisted 5
+    assert_eq!(out.ch(0)[1], 5.0, "sample 1: value persisted from sample 0");
+    // Sample 2: in1=0, no poke, peek returns persisted 5
+    assert_eq!(out.ch(0)[2], 5.0, "sample 2: value persisted from sample 0");
+    // Sample 3: in1=3, poke overwrites to 3, peek returns 3
+    assert_eq!(out.ch(0)[3], 3.0, "sample 3: poke overwrites to 3");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Region-local variable as peek/poke data (must error)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn region_local_as_peek_data_errors() {
+    // A region-local variable (assigned inside the region) is NOT a data buffer.
+    // peek(x, 0) where x is a local should error at lowering.
+    let err = opengen_genexpr::parse_and_lower(
+        r"if (1) { x = 1; out1 = peek(x, 0); }"
+    ).unwrap_err();
+    assert!(
+        err.to_string().contains("unknown data buffer"),
+        "expected 'unknown data buffer' error, got: {}",
+        err.to_string()
+    );
+}
+
+#[test]
+fn region_local_as_poke_data_errors() {
+    // Same for poke: a region-local variable is not a valid data buffer.
+    let err = opengen_genexpr::parse_and_lower(
+        r"if (1) { x = 1; poke(x, 5.0, 0); }"
+    ).unwrap_err();
+    assert!(
+        err.to_string().contains("unknown data buffer"),
+        "expected 'unknown data buffer' error, got: {}",
+        err.to_string()
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Data name shadowed by region-local still resolves to Data
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn data_not_shadowed_by_region_local_of_same_name() {
+    // A Data named 'd' at graph level AND a local 'd' inside the region:
+    // peek(d, ...) resolves to the Data buffer, not the local.
+    let src = "Data d(4); \
+               if (1) { \
+                 d = 0; /* region-local named d */ \
+                 poke(d, 42.0, 0); /* writes to Data buffer d */ \
+                 out1 = peek(d, 0); /* reads from Data buffer d */ \
+               }";
+    let out = render(src, 48000.0, 1);
+    assert_eq!(out.ch(0)[0], 42.0);
 }
 
 // ═══════════════════════════════════════════════════════════════════

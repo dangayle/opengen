@@ -33,8 +33,19 @@ use opengen_ir::StateDecl;
 /// Read a value from a data buffer: `out = peek(name, index)`.
 ///
 /// # Definition
-/// Returns `state[floor(index)]` if `0 <= floor(index) < state.len()`,
-/// otherwise returns `0.0`. No interpolation — truncates the index toward zero.
+/// Returns `state[trunc(index)]` if `0 <= trunc(index) < state.len()`,
+/// otherwise returns `0.0`. No interpolation — truncates the index toward zero
+/// via Rust's `as i64` cast.
+///
+/// # NaN Index
+/// `NaN as i64` converts to `0` (per Rust's saturating cast semantics). This means
+/// `peek(…, NaN)` reads slot 0 (in-bounds).
+///
+/// # M2 Conformance
+/// - Indices in `(-1, 0)` truncate toward zero to `0`, which is in-bounds (reads slot 0).
+/// - `NaN` index converts to `0` (reads slot 0). These behaviors are
+///   conformance-verified in `#[test]` and should be validated against gen~ output
+///   in the M2 conformance harness.
 ///
 /// # Documented
 /// `reference/gen/refpages/dsp/gen_dsp_peek.maxref.xml`: first argument names a
@@ -73,8 +84,19 @@ pub fn peek(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
 /// Write a value into a data buffer: `poke(name, value, index)`.
 ///
 /// # Definition
-/// If `0 <= floor(index) < state.len()`, sets `state[floor(index)] = value`.
+/// If `0 <= trunc(index) < state.len()`, sets `state[trunc(index)] = value`.
 /// Otherwise, no write occurs (`boundmode ignore`). Always returns 0.0 (sink).
+/// Truncation is toward zero via Rust's `as i64` cast.
+///
+/// # NaN Index
+/// `NaN as i64` converts to `0` (per Rust's saturating cast semantics). This means
+/// `poke(…, val, NaN)` writes slot 0 (in-bounds).
+///
+/// # M2 Conformance
+/// - Indices in `(-1, 0)` truncate toward zero to `0`, which is in-bounds (writes slot 0).
+/// - `NaN` index converts to `0` (writes slot 0). These behaviors are
+///   conformance-verified in `#[test]` and should be validated against gen~ output
+///   in the M2 conformance harness.
 ///
 /// Replace-write: the new value overwrites the old value (no overdub/accum).
 ///
@@ -202,5 +224,54 @@ mod tests {
         // Large negative floats — truncated to i64, -1.5 → -1 (OOB), -0.1 → 0 (in bounds)
         assert_eq!(peek(&[-1.5], &mut [10.0], 48000.0), 0.0);
         assert_eq!(peek(&[-2.0], &mut [10.0], 48000.0), 0.0);
+    }
+
+    #[test]
+    fn peek_negative_fraction_truncates_in_bounds() {
+        // -0.5 as i64 → 0 (truncation toward zero), which is in-bounds for a 4-slot buffer
+        let state = [42.0, 0.0, 0.0, 0.0];
+        assert_eq!(peek(&[-0.5], &mut state.clone(), 48000.0), 42.0);
+    }
+
+    #[test]
+    fn poke_negative_fraction_truncates_in_bounds() {
+        // -0.5 as i64 → 0 (truncation toward zero), writes slot 0
+        let mut state = [0.0; 4];
+        poke(&[99.0, -0.5], &mut state, 48000.0);
+        assert_eq!(state[0], 99.0);
+        assert_eq!(state[1], 0.0);
+    }
+
+    #[test]
+    fn peek_nan_index_reads_slot_zero() {
+        // NaN as i64 → 0, reads slot 0
+        let state = [42.0, 0.0];
+        assert_eq!(peek(&[f64::NAN], &mut state.clone(), 48000.0), 42.0);
+    }
+
+    #[test]
+    fn poke_nan_index_writes_slot_zero() {
+        // NaN as i64 → 0, writes slot 0
+        let mut state = [0.0; 4];
+        poke(&[99.0, f64::NAN], &mut state, 48000.0);
+        assert_eq!(state[0], 99.0);
+        assert_eq!(state[1], 0.0);
+    }
+
+    #[test]
+    fn poke_truncates_float_index() {
+        let mut state = [0.0; 4];
+        // 0.9 as i64 → 0
+        poke(&[99.0, 0.9], &mut state, 48000.0);
+        assert_eq!(state[0], 99.0);
+        assert_eq!(state[1], 0.0);
+    }
+
+    #[test]
+    fn poke_oob_beyond_length_entire_state_unchanged() {
+        let mut state = [1.0, 2.0, 3.0, 4.0];
+        let original = state;
+        poke(&[42.0, 4.0], &mut state, 48000.0);
+        assert_eq!(state, original, "entire state should be unchanged after OOB poke");
     }
 }

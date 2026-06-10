@@ -932,8 +932,11 @@ impl<'a> Lowerer<'a> {
                             loc: None,
                         }),
                     };
-                    // Verify the data name exists (as a Data/Buffer decl) in the graph.
-                    if self.bindings.get(&data_name).is_none() && meta.local_slot(&data_name).is_none() {
+                    // Verify the data name exists as a Data/Buffer binding in the graph.
+                    // We check only self.bindings (graph-level Data/Buffer nodes, including those
+                    // declared inside the region and promoted during region lowering). We do NOT
+                    // check meta.local_slot — a region-local variable is NOT a valid data buffer.
+                    if self.bindings.get(&data_name).is_none() {
                         return Err(LowerError {
                             msg: format!("unknown data buffer '{}' in '{}'", data_name, name),
                             loc: None,
