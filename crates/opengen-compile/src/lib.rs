@@ -259,7 +259,10 @@ pub fn compile(g: &Graph, reg: &Registry, sr: f64) -> Result<Patch, CompileError
         }
     }
     
-    // Append state updates at the end
+    // Append state updates at the end of the step list.
+    // Execution model: all Compute steps run first (stateful nodes output the *last* sample's state),
+    // then StateUpdate steps capture this sample's inputs for the *next* sample. This split is what
+    // implements the y[n] = x[n-1] delay: compute reads old state, update writes current input.
     steps.extend(stateful_updates);
     
     // Build outputs list in order by output index

@@ -146,12 +146,14 @@ impl<'a> Lowerer<'a> {
             Expr::Ident(name) => {
                 // Check for input nodes (in1, in2, ...)
                 if let Some(input_index) = parse_input_name(name) {
-                    // Check if we've already created an Input node for this identifier
+                    // Deduplicate Input nodes: each inN identifier maps to exactly one IR Input node,
+                    // regardless of how many times it's referenced. This keeps the IR minimal and
+                    // ensures NodeId assignment is deterministic (doesn't vary with reference count).
                     if let Some(port) = self.bindings.get(name) {
                         return Ok(*port);
                     }
                     
-                    // Create the Input node and cache it
+                    // Create the Input node and cache it in bindings for future references
                     let node_id = self.graph.add_node(Node::input(input_index));
                     let port = Port { node: node_id, index: 0 };
                     self.bindings.insert(name.clone(), port);
