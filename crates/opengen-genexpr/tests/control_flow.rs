@@ -192,19 +192,35 @@ fn stateful_ops_get_independent_state_per_call_site() {
     assert_eq!(out.ch(0), &expected_a[..3]);
     assert_eq!(out.ch(1), &expected_b[..3]);
 
-    // Also verify noise calls: with correct per-site state, two noise()
-    // calls would produce IDENTICAL first samples (same seed), then diverge.
-    // Currently BUGGY: see report in commit message.
+    // Verify noise calls: with correct per-site state, two noise() calls
+    // produce IDENTICAL sequences (same seed, independent state slots).
+    // This is per-call-site state as specified by D6.
     let out2 = render(
         "a = 0; b = 0; if (1) { a = noise(); b = noise(); } out1 = a; out2 = b;",
         48000.0,
-        2,
+        4,
     );
-    // Both produce in-range values (minimal smoke test)
-    for s in 0..2 {
+    assert_eq!(
+        out2.ch(0),
+        out2.ch(1),
+        "identical call sites must produce identical independent sequences"
+    );
+    for s in 0..4 {
         assert!(out2.ch(0)[s] >= -1.0 && out2.ch(0)[s] < 1.0);
-        assert!(out2.ch(1)[s] >= -1.0 && out2.ch(1)[s] < 1.0);
     }
+}
+
+#[test]
+fn identical_stateful_calls_get_independent_state() {
+    // Two structurally identical noise() calls: per-call-site state means each
+    // starts from the fixed seed -> identical sequences (NOT one interleaved sequence).
+    let src = "a = 0; b = 0;\nif (1) { a = noise(); b = noise(); }\nout1 = a; out2 = b;";
+    let out = opengen_testkit::render(src, 48_000.0, 4);
+    assert_eq!(
+        out.ch(0),
+        out.ch(1),
+        "identical call sites must produce identical independent sequences"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════

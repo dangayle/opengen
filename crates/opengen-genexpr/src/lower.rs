@@ -3,6 +3,7 @@
 use crate::ast::{*, UnaryOp};
 use opengen_ir::{proc, Graph, Node, NodeKind, Port, StateDecl};
 use opengen_ops::Registry;
+use std::cell::Cell;
 use std::collections::HashMap;
 
 /// Builtin constants that GenExpr resolves in identifier position (unless shadowed).
@@ -218,6 +219,10 @@ pub struct Lowerer<'a> {
     registry: &'a Registry,
     /// Maps identifier names to their output ports
     bindings: HashMap<String, Port>,
+    /// Counter for stateful op call sites during region lowering.
+    /// Ensures per-call-site state allocation even when two calls are
+    /// structurally identical (same operator, same arguments).
+    region_stateful_idx: Cell<usize>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -226,6 +231,7 @@ impl<'a> Lowerer<'a> {
             graph: Graph::new(),
             registry,
             bindings: HashMap::new(),
+            region_stateful_idx: Cell::new(0),
         }
     }
 
@@ -252,6 +258,8 @@ impl<'a> Lowerer<'a> {
     /// remain only: Input nodes (for inN), Param nodes (for params), the Region,
     /// and Output nodes.
     fn lower_to_region(&mut self, program: &Program) -> Result<Graph, LowerError> {
+        self.region_stateful_idx.set(0);
+
         // ---- Pass 1: collect metadata ----
         let mut meta = RegionMeta::new();
         for stmt in &program.statements {
@@ -903,19 +911,30 @@ impl<'a> Lowerer<'a> {
                     });
                 }
 
-                // Determine state_base: look up in meta.stateful_ops
+                // Determine state_base: look up in meta.stateful_ops by POSITION.
+                // Both the metadata collection pass and this lowering pass walk the
+                // AST in the same DFS order, so the nth stateful call encountered
+                // during lowering corresponds to the nth entry in meta.stateful_ops.
+                // This avoids the bug of matching structurally identical calls
+                // (e.g. two noise() calls) via `find` + structural equality, which
+                // would share state across call sites.
                 let state_base = if op_def.state != StateDecl::None {
-                    // Stateful op call: find the matching entry in meta.stateful_ops.
-                    // We look it up by the entire call expression match.
-                    let found = meta.stateful_ops.iter().find(|info| {
-                        expr_eq(&info.expr, expr)
-                    });
-                    match found {
-                        Some(info) => {
-                            let base = meta.histories.len() as u32 + info.state_base;
-                            base
+                    let idx = self.region_stateful_idx.get();
+                    self.region_stateful_idx.set(idx + 1);
+                    if let Some(info) = meta.stateful_ops.get(idx) {
+                        // Defensive: verify walk-order agreement by checking the op name.
+                        if let Expr::Call { name: info_name, .. } = &info.expr {
+                            assert_eq!(
+                                info_name, name,
+                                "stateful op name mismatch at position {}: \
+                                 metadata collected '{}' but lowering '{}' — 
+                                 AST walk order inconsistency",
+                                idx, info_name, name
+                            );
                         }
-                        None => u32::MAX,
+                        meta.histories.len() as u32 + info.state_base
+                    } else {
+                        u32::MAX
                     }
                 } else {
                     u32::MAX
@@ -1382,30 +1401,6 @@ fn has_stmt_control_flow(stmt: &Statement) -> bool {
         StatementKind::Return(_)
         | StatementKind::MultiAssign { .. }
         | StatementKind::FuncDecl { .. } => true, // These also need region path
-        _ => false,
-    }
-}
-
-/// Approximate structural equality for Expr, used to match stateful op call sites
-/// collected during metadata pass with those encountered during statement lowering.
-/// We compare by structural identity (same shape), not by Expr::PartialEq (which
-/// is derived and exact). For call expressions, we compare op name and args recursively.
-fn expr_eq(a: &Expr, b: &Expr) -> bool {
-    match (a, b) {
-        (Expr::Number(na), Expr::Number(nb)) => na == nb,
-        (Expr::Str(sa), Expr::Str(sb)) => sa == sb,
-        (Expr::Ident(sa), Expr::Ident(sb)) => sa == sb,
-        (Expr::BinOp { op: oa, left: la, right: ra }, Expr::BinOp { op: ob, left: lb, right: rb }) => {
-            oa == ob && expr_eq(la, lb) && expr_eq(ra, rb)
-        }
-        (Expr::Unary(ua, ea), Expr::Unary(ub, eb)) => ua == ub && expr_eq(ea, eb),
-        (Expr::Call { name: na, args: aa, .. }, Expr::Call { name: nb, args: ab, .. }) => {
-            na == nb && aa.len() == ab.len() && aa.iter().zip(ab).all(|(a, b)| expr_eq(a, b))
-        }
-        (Expr::Ternary { cond: ca, true_expr: ta, false_expr: fa },
-         Expr::Ternary { cond: cb, true_expr: tb, false_expr: fb }) => {
-            expr_eq(ca, cb) && expr_eq(ta, tb) && expr_eq(fa, fb)
-        }
         _ => false,
     }
 }
