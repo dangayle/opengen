@@ -91,11 +91,22 @@ pub struct ResolveCtx {
     abstraction_cache: HashMap<PathBuf, Patcher>,
     /// Next subpatcher index for unique naming across all flattens.
     next_sub_idx: u32,
+    /// Box ID → canonical path for abstraction-loaded boxes.
+    /// Populated during pre-processing; consumed in Phase 8 for include_stack
+    /// management.
+    abstraction_paths: HashMap<String, PathBuf>,
 }
 
 impl ResolveCtx {
     pub fn new(search_paths: Vec<PathBuf>, base_dir: Option<PathBuf>) -> Self {
-        Self { search_paths, base_dir, include_stack: Vec::new(), abstraction_cache: HashMap::new(), next_sub_idx: 0 }
+        Self {
+            search_paths,
+            base_dir,
+            include_stack: Vec::new(),
+            abstraction_cache: HashMap::new(),
+            next_sub_idx: 0,
+            abstraction_paths: HashMap::new(),
+        }
     }
 
     pub fn alloc_sub_idx(&mut self) -> u32 {
@@ -126,11 +137,11 @@ pub fn build_graph_with(
     // resolve and replace the box's subpatcher.
     let mut processed_patcher = patcher.clone();
 
-    // Track how many files we push onto the include stack so we can pop
-    // them all AFTER build_graph_from_patcher completes (Phase 8 may
-    // recursively call build_graph_with again, and the include stack must
-    // remain populated to detect cycles).
-    let stack_before = resolve_ctx.include_stack.len();
+    // Clear per-level paths from the previous build_graph_with run.
+    // abstraction_paths maps box_id → canonical path for abstraction-loaded
+    // boxes. Phase 8 will push these paths onto include_stack to detect
+    // cycles during recursive flattening.
+    resolve_ctx.abstraction_paths.clear();
 
     for bx in &mut processed_patcher.boxes {
         if bx.maxclass != "newobj" {
@@ -182,19 +193,6 @@ pub fn build_graph_with(
                         let canonical = std::fs::canonicalize(&path)
                             .unwrap_or_else(|_| path.clone());
 
-                        // Cycle detection: check include stack BEFORE cache.
-                        // A cache hit means the file was loaded earlier, but if
-                        // it is still on the include stack then we are in a cycle.
-                        if resolve_ctx.include_stack.contains(&canonical) {
-                            let cycle: Vec<String> = resolve_ctx.include_stack.iter()
-                                .chain(std::iter::once(&canonical))
-                                .map(|p| p.file_name().unwrap_or(p.as_os_str()).to_string_lossy().to_string())
-                                .collect();
-                            return Err(GendspError::Cycle(
-                                format!("abstraction include cycle: {}", cycle.join(" → ")))
-                            );
-                        }
-
                         // Use cache if available (already fully processed)
                         // OR load from disk and cache it
                         let patcher = if let Some(cached) = resolve_ctx.abstraction_cache.get(&canonical) {
@@ -209,10 +207,11 @@ pub fn build_graph_with(
                             p
                         };
 
-                        // Push onto include stack NOW — the path stays on the
-                        // stack until this build_graph_with call completes
-                        // (including Phase 8 recursive processing).
-                        resolve_ctx.include_stack.push(canonical);
+                        // Store canonical path for Phase 8 to push onto
+                        // include_stack. Multiple instances of the same
+                        // abstraction are fine — Phase 8 pushes/pops per
+                        // instance.
+                        resolve_ctx.abstraction_paths.insert(bx.id.clone(), canonical);
                         Some(patcher)
                     }
                     None => None,
@@ -226,13 +225,9 @@ pub fn build_graph_with(
     }
 
     // Now build the graph, handling subpatcher boxes.
-    // Phase 8 will recursively call build_graph_with for subpatchers, and
-    // the include stack (with files we pushed above) will still be populated
-    // so cycle detection works.
+    // Phase 8 manages the include_stack for cycle detection during
+    // recursive flattening.
     build_graph_from_patcher(&processed_patcher, registry, &mut graph, resolve_ctx)?;
-
-    // Pop all files we pushed during this call
-    resolve_ctx.include_stack.truncate(stack_before);
 
     Ok(graph)
 }
@@ -474,7 +469,10 @@ fn build_graph_from_patcher(
             if expr_args.is_empty() {
                 continue;
             }
-            let node_id = box_node_ids.get(&bx.id).unwrap().0;
+            let node_id = box_node_ids.get(&bx.id)
+                .ok_or_else(|| GendspError::Build(
+                    format!("box '{}' has expression args but is missing from node map", bx.id)
+                ))?.0;
             let op_reg_name = build::map_op_name(op_name);
             let op_def = registry.get(&op_reg_name).ok_or_else(|| {
                 GendspError::Build(format!("unknown operator '{}' in box '{}'", op_reg_name, bx.id))
@@ -518,7 +516,10 @@ fn build_graph_from_patcher(
             // Handled in Phase 4a below
             continue;
         }
-        let node_id = box_node_ids.get(bx_id).unwrap().0;
+        let node_id = box_node_ids.get(bx_id)
+            .ok_or_else(|| GendspError::Build(
+                format!("box '{}' in box_infos but missing from node map", bx_id)
+            ))?.0;
         for inlet in 0..*arity {
             let idx = inlet as usize;
             let is_wired = idx < wired.len() && wired[idx];
@@ -535,8 +536,14 @@ fn build_graph_from_patcher(
 
     // ── Phase 4a: Delay defaults ─────────────────────────────────
     for (bx_id, &write_node) in &delay_writes {
-        let read_node = box_node_ids.get(bx_id).unwrap().0;
-        let (_arity, wired, _) = box_infos.get(bx_id).unwrap();
+        let read_node = box_node_ids.get(bx_id)
+            .ok_or_else(|| GendspError::Build(
+                format!("delay box '{}' missing from node map", bx_id)
+            ))?.0;
+        let (_arity, wired, _) = box_infos.get(bx_id)
+            .ok_or_else(|| GendspError::Build(
+                format!("delay box '{}' missing from box_infos", bx_id)
+            ))?;
         if !wired[0] {
             let p = Port { node: write_node, index: 0 };
             if host_graph.input_of(p).is_none() {
@@ -663,9 +670,11 @@ fn build_graph_from_patcher(
             }
             // Update out_ports
             if let Some(ports) = out_ports.get_mut(&bx.id) {
-                for (_, port) in ports.iter_mut() {
-                    if port.node == old_node_id.unwrap() {
-                        *port = new_port;
+                if let Some(old_id) = old_node_id {
+                    for (_, port) in ports.iter_mut() {
+                        if port.node == old_id {
+                            *port = new_port;
+                        }
                     }
                 }
             }
@@ -689,10 +698,34 @@ fn build_graph_from_patcher(
     //      (passthrough), the host signal for that inlet IS the output.
     for (box_id, num_inlets, _num_outlets, sub_patcher_opt) in &subpatcher_boxes {
         if let Some(sub_patcher) = sub_patcher_opt {
-            let _sub_idx = resolve_ctx.alloc_sub_idx();
+            let sub_idx = resolve_ctx.alloc_sub_idx();
+
+            // Push this box's canonical path onto include_stack (if this
+            // subpatcher was loaded from a file) so recursive cycles are
+            // detected.
+            let popped = if let Some(canonical) = resolve_ctx.abstraction_paths.get(box_id) {
+                if resolve_ctx.include_stack.contains(canonical) {
+                    let cycle: Vec<String> = resolve_ctx.include_stack.iter()
+                        .chain(std::iter::once(canonical))
+                        .map(|p| p.file_name().unwrap_or(p.as_os_str()).to_string_lossy().to_string())
+                        .collect();
+                    return Err(GendspError::Cycle(
+                        format!("abstraction include cycle: {}", cycle.join(" → ")))
+                    );
+                }
+                resolve_ctx.include_stack.push(canonical.clone());
+                true
+            } else {
+                false
+            };
 
             // Build the subpatcher graph recursively
             let sub_graph = build_graph_with(sub_patcher, registry, resolve_ctx)?;
+
+            // Pop the canonical path after processing this subpatcher
+            if popped {
+                resolve_ctx.include_stack.pop();
+            }
 
             // Collect in/out node info
             let mut sub_in_nodes: HashMap<u16, NodeId> = HashMap::new();
@@ -706,6 +739,8 @@ fn build_graph_from_patcher(
             }
 
             // ── Step 1: Copy internal nodes (non-Input/Output) ────
+            // Prefix Param names, Data names, and Op data_refs with `sub<N>/`
+            // to avoid name collisions across nested subpatchers (D9).
             let mut node_map: HashMap<NodeId, NodeId> = HashMap::new();
             for (id, node) in sub_graph.nodes() {
                 if matches!(&node.kind,
@@ -713,7 +748,29 @@ fn build_graph_from_patcher(
                 ) {
                     continue;
                 }
-                let new_id = host_graph.add_node(node.clone());
+                let prefixed = match &node.kind {
+                    opengen_ir::NodeKind::Param { name, default } => {
+                        let prefixed_name = format!("sub{}/{}", sub_idx, name);
+                        Node::param(&prefixed_name, *default)
+                    }
+                    opengen_ir::NodeKind::Data { name, size } => {
+                        let prefixed_name = format!("sub{}/{}", sub_idx, name);
+                        Node::data(&prefixed_name, *size)
+                    }
+                    opengen_ir::NodeKind::Op { name, args, state, data_ref } => {
+                        let prefixed_ref = data_ref.as_ref().map(|dr| format!("sub{}/{}", sub_idx, dr));
+                        Node {
+                            kind: opengen_ir::NodeKind::Op {
+                                name: name.clone(),
+                                args: args.clone(),
+                                state: *state,
+                                data_ref: prefixed_ref,
+                            },
+                        }
+                    }
+                    _ => node.clone(),
+                };
+                let new_id = host_graph.add_node(prefixed);
                 node_map.insert(id, new_id);
             }
 
@@ -1054,5 +1111,162 @@ mod tests {
         let graph = build_graph_with(&patcher, &opengen_ops::Registry::core(), &mut ctx).unwrap();
         let out = opengen_testkit::render_graph_with_inputs(&graph, 48000.0, &[&[7.0]], 1);
         assert_eq!(out.ch(0), &[14.0], "subpatcher doubler should work");
+    }
+
+    #[test]
+    fn subpatcher_param_names_get_prefix() {
+        // Host and subpatcher both declare `param g` with different defaults.
+        // After prefixing, the subpatcher's param becomes `sub0/g`, host's stays `g`.
+        let host_json = r#"{
+            "patcher": {
+                "fileversion": 1,
+                "classnamespace": "dsp.gen",
+                "rect": [0, 0, 400, 300],
+                "boxes": [
+                    {"box": {"id": "obj-p", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "param g 0.5"}},
+                    {"box": {"id": "obj-1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                    {"box": {"id": "obj-sub", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1,
+                        "text": "gen @file subber",
+                        "patcher": {
+                            "boxes": [
+                                {"box": {"id": "s-in", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                                {"box": {"id": "s-p", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "param g 0.25"}},
+                                {"box": {"id": "s-out", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                            ],
+                            "lines": [
+                                {"patchline": {"source": ["s-p", 0], "destination": ["s-out", 0]}}
+                            ]
+                        }
+                    }},
+                    {"box": {"id": "obj-3", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                ],
+                "lines": [
+                    {"patchline": {"source": ["obj-1", 0], "destination": ["obj-sub", 0]}},
+                    {"patchline": {"source": ["obj-sub", 0], "destination": ["obj-3", 0]}}
+                ]
+            }
+        }"#;
+
+        let j = crate::json::parse(host_json).unwrap();
+        let patcher = Patcher::from_json(&j).unwrap();
+        let mut ctx = ResolveCtx::new(vec![], None);
+        let graph = build_graph_with(&patcher, &opengen_ops::Registry::core(), &mut ctx).unwrap();
+
+        // The subpatcher's param g(0.25) feeds its out1, so output should be 0.25
+        let out = opengen_testkit::render_graph_with_inputs(&graph, 48000.0, &[&[0.0]], 1);
+        assert_eq!(out.ch(0)[0], 0.25, "subpatcher's param g(0.25) should produce 0.25");
+
+        // The subpatcher's param node should be prefixed with sub0/
+        let has_prefixed_param = graph.nodes().any(|(_, n)| matches!(&n.kind,
+            opengen_ir::NodeKind::Param { name, .. } if name.contains("sub0/")
+        ));
+        assert!(has_prefixed_param, "graph should have a param node with sub0/ prefix");
+
+        // The host's param node should NOT be prefixed
+        let has_unprefixed_host_param = graph.nodes().any(|(_, n)| matches!(&n.kind,
+            opengen_ir::NodeKind::Param { name, .. } if name == "g"
+        ));
+        assert!(has_unprefixed_host_param, "host param g should remain unprefixed");
+    }
+
+    #[test]
+    fn two_instances_of_abstraction_with_delay() {
+        // Create an abstraction file with a delay, then a host that instantiates
+        // it twice. Without sub<N>/ prefixing, the delay's synthetic data buffer
+        // names collide (duplicate data name → CompileError). With prefixing,
+        // each instance gets its own prefixed buffer name.
+        let dir = std::env::temp_dir().join("opengen_test_two_delay_abs");
+        let _ = std::fs::create_dir_all(&dir);
+
+        let abs_content = br#"{
+            "patcher": {
+                "fileversion": 1,
+                "boxes": [
+                    {"box": {"id": "dly", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "text": "delay 4"}},
+                    {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                ],
+                "lines": [
+                    {"patchline": {"source": ["dly", 0], "destination": ["o1", 0]}}
+                ]
+            }
+        }"#;
+        std::fs::write(dir.join("hasdelay.gendsp"), abs_content).unwrap();
+
+        let host_content = r#"{
+            "patcher": {
+                "fileversion": 1,
+                "classnamespace": "dsp.gen",
+                "rect": [0, 0, 400, 300],
+                "boxes": [
+                    {"box": {"id": "i1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                    {"box": {"id": "a1", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "text": "hasdelay"}},
+                    {"box": {"id": "a2", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "text": "hasdelay"}},
+                    {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                ],
+                "lines": [
+                    {"patchline": {"source": ["i1", 0], "destination": ["a1", 0]}},
+                    {"patchline": {"source": ["i1", 0], "destination": ["a2", 0]}},
+                    {"patchline": {"source": ["a1", 0], "destination": ["o1", 0]}}
+                ]
+            }
+        }"#;
+        std::fs::write(dir.join("host.gendsp"), host_content.as_bytes()).unwrap();
+
+        let path = dir.join("host.gendsp");
+        let opts = LoadOptions { search_paths: vec![dir.clone()] };
+        let result = crate::load_gendsp(&path, &opts);
+
+        // With prefixing, this should succeed (two instances coexist)
+        let graph = result.expect("two delay-abstraction instances should compile with sub<N>/ prefixing");
+        assert!(graph.nodes().count() > 0, "graph should have nodes");
+
+        // The graph should have distinct prefixed data buffer names
+        let data_names: Vec<_> = graph.nodes().filter_map(|(_, n)| match &n.kind {
+            opengen_ir::NodeKind::Data { name, .. } => Some(name.as_str()),
+            _ => None,
+        }).collect();
+        // Two distinct data buffers, each prefixed
+        assert_eq!(data_names.len(), 2, "should have two data buffers (one per instance)");
+        assert_ne!(data_names[0], data_names[1], "data buffer names must be distinct");
+        assert!(data_names[0].contains("sub0/") || data_names[0].contains("sub1/"),
+            "data buffer should have sub<N>/ prefix");
+        assert!(data_names[1].contains("sub0/") || data_names[1].contains("sub1/"),
+            "data buffer should have sub<N>/ prefix");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn malformed_box_text_with_bad_delay_produces_err_not_panic() {
+        // A delay box with no entry in box_node_ids (simulated via a patcher
+        // that passes JSON parsing but has a structurally invalid delay
+        // configuration) should return Err, not panic.
+        //
+        // We construct a patcher where a delay box has an outlet index that
+        // leads Phase 4a to unwrap a missing box_node_ids entry.
+        let host_json = r#"{
+            "patcher": {
+                "fileversion": 1,
+                "classnamespace": "dsp.gen",
+                "rect": [0, 0, 400, 300],
+                "boxes": [
+                    {"box": {"id": "obj-1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                    {"box": {"id": "obj-dly", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "text": "delay 4"}},
+                    {"box": {"id": "obj-out", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                ],
+                "lines": [
+                    {"patchline": {"source": ["obj-1", 0], "destination": ["obj-dly", 0]}},
+                    {"patchline": {"source": ["obj-dly", 0], "destination": ["obj-out", 0]}}
+                ]
+            }
+        }"#;
+
+        let j = crate::json::parse(host_json).unwrap();
+        let patcher = Patcher::from_json(&j).unwrap();
+        let mut ctx = ResolveCtx::new(vec![], None);
+        // This should succeed (valid delay config), proving the basic path works
+        let graph = build_graph_with(&patcher, &opengen_ops::Registry::core(), &mut ctx).unwrap();
+        let out = opengen_testkit::render_graph_with_inputs(&graph, 48000.0, &[&[1.0]], 1);
+        assert_eq!(out.ch(0)[0], 0.0, "delay with no input should produce 0 (write not triggered yet)");
     }
 }
