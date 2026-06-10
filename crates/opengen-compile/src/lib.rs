@@ -57,7 +57,8 @@ impl Patch {
                     self.values[step.value_slot] = kernel(&input_vals, state_slice, self.sr);
                 }
                 StepKind::StateUpdate { input_slot, state_range } => {
-                    // Copy current input value into state for next sample
+                    // Copy current input value into state for next sample.
+                    // M1 contract: input slot 0 → state slot 0 (multi-slot ops own extra slots via kernel).
                     let val = self.values[*input_slot];
                     self.state[state_range.start] = val;
                 }
@@ -256,13 +257,22 @@ pub fn compile(g: &Graph, reg: &Registry, sr: f64) -> Result<Patch, CompileError
     steps.extend(stateful_updates);
     
     // Build outputs list in order by output index
-    let max_output = outputs_map.keys().max().copied().unwrap_or(0);
-    let mut outputs = vec![0; max_output as usize + 1];
-    for (&idx, &slot) in &outputs_map {
-        outputs[idx as usize] = slot;
+    // Validate that output indices are contiguous (no gaps)
+    if let Some(&max_output) = outputs_map.keys().max() {
+        for i in 0..=max_output {
+            if !outputs_map.contains_key(&i) {
+                return Err(CompileError(format!("missing output index {}", i)));
+            }
+        }
+        let mut outputs = vec![0; max_output as usize + 1];
+        for (&idx, &slot) in &outputs_map {
+            outputs[idx as usize] = slot;
+        }
+        Ok(Patch { steps, values, state, outputs, sr })
+    } else {
+        // No outputs: empty graph is valid
+        Ok(Patch { steps, values, state, outputs: vec![], sr })
     }
-    
-    Ok(Patch { steps, values, state, outputs, sr })
 }
 
 #[cfg(test)]
@@ -300,5 +310,29 @@ mod tests {
         g.connect(Port { node: add, index: 0 }, Port { node: out, index: 0 });
         let err = compile(&g, &opengen_ops::Registry::core(), 48_000.0).unwrap_err();
         assert!(err.to_string().contains("feedback requires history or delay"));
+    }
+
+    #[test]
+    fn rejects_non_contiguous_outputs() {
+        // Graph with Output(0) and Output(2), but no Output(1)
+        let mut g = Graph::new();
+        let c1 = g.add_node(Node::constant(1.0));
+        let c2 = g.add_node(Node::constant(2.0));
+        let out0 = g.add_node(Node::output(0));
+        let out2 = g.add_node(Node::output(2)); // Gap: missing output 1
+        g.connect(Port { node: c1, index: 0 }, Port { node: out0, index: 0 });
+        g.connect(Port { node: c2, index: 0 }, Port { node: out2, index: 0 });
+        
+        let err = compile(&g, &opengen_ops::Registry::core(), 48_000.0).unwrap_err();
+        assert!(err.to_string().contains("missing output index"));
+    }
+
+    #[test]
+    fn compiles_empty_graph_with_no_outputs() {
+        // Empty graph should compile successfully with zero outputs
+        let g = Graph::new();
+        let mut patch = compile(&g, &opengen_ops::Registry::core(), 48_000.0).unwrap();
+        let out = patch.process(&[]);
+        assert_eq!(out, vec![]);
     }
 }
