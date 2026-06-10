@@ -52,6 +52,12 @@ impl Patcher {
     pub fn from_json(json: &Json) -> Result<Self, String> {
         let patcher = json.get("patcher")
             .ok_or_else(|| "missing 'patcher' key".to_string())?;
+        Self::from_json_value(patcher)
+    }
+
+    /// Extract a `Patcher` from a "patcher" JSON object (without the wrapper).
+    /// Used both by the top-level `from_json` and by embedded subpatcher parsing.
+    pub fn from_json_value(patcher: &Json) -> Result<Self, String> {
 
         let boxes_arr = patcher.get("boxes")
             .and_then(|j| j.as_arr())
@@ -79,6 +85,8 @@ impl Patcher {
 
 impl GBox {
     /// Extract a `GBox` from a `box` JSON object.
+    /// Looks for an embedded subpatcher under the JSON keys `patcher` (used by real
+    /// `.gendsp` files) or `subpatcher` (legacy field name).
     pub fn from_json(json: &Json) -> Result<Self, String> {
         let id = json.get("id")
             .and_then(|j| j.as_str())
@@ -103,6 +111,19 @@ impl GBox {
             .map(|n| n as u16)
             .unwrap_or(0);
 
+        // Parse embedded subpatcher. Real .gendsp files use the "patcher" key on the
+        // box object (not "subpatcher"). Check "patcher" first, then "subpatcher".
+        let subpatcher = match json.get("patcher").or_else(|| json.get("subpatcher")) {
+            Some(sp_json) => {
+                // The subpatcher JSON might be wrapped in {"patcher": {...}} or
+                // be the patcher object directly. Normalize by checking for "patcher" key.
+                let inner = sp_json.get("patcher").unwrap_or(sp_json);
+                Some(Box::new(Patcher::from_json_value(inner)
+                    .map_err(|e| format!("box '{}' subpatcher: {}", id, e))?))
+            }
+            None => None,
+        };
+
         Ok(GBox {
             id,
             maxclass,
@@ -110,7 +131,7 @@ impl GBox {
             code,
             numinlets,
             numoutlets,
-            subpatcher: None,
+            subpatcher,
         })
     }
 }

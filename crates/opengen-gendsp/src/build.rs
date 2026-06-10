@@ -824,7 +824,7 @@ impl<'a> BuildCtx<'a> {
 // ─── Free functions ──────────────────────────────────────────────────────────
 
 /// Map box text operator name to registry operator name.
-fn map_op_name(name: &str) -> String {
+pub(crate) fn map_op_name(name: &str) -> String {
     match name {
         "+" => "add",
         "-" => "sub",
@@ -849,7 +849,7 @@ fn map_op_name(name: &str) -> String {
 }
 
 /// Resolve a builtin constant name to its f64 value.
-fn resolve_builtin(name: &str) -> Option<f64> {
+pub(crate) fn resolve_builtin(name: &str) -> Option<f64> {
     match name {
         "pi" => Some(std::f64::consts::PI),
         "twopi" => Some(std::f64::consts::TAU),

@@ -185,3 +185,190 @@ fn fixture_history_named_e2e() {
     // h1 starts at 0, first sample: history(in1=1.0) → 0, second: history(in1=0.0) → 1.0
     assert_eq!(trace.len(), 2);
 }
+
+// ─── Reference example file tests (skip-if-missing) ────────────────
+
+const REF_EXAMPLES: &[&str] = &[
+    "crossover.gendsp",
+    "freeverb_allpass.gendsp",
+    "freeverb_comb.gendsp",
+    "freeverb.gendsp",
+    "gen_resonator.gendsp",
+    "waveguide_string.gendsp",
+];
+
+#[test]
+fn load_all_reference_examples() {
+    let root = std::path::Path::new("reference/gen/examples");
+    if !root.exists() {
+        eprintln!("skipping: reference/ directory not available");
+        return;
+    }
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![root.to_path_buf()] };
+
+    for filename in REF_EXAMPLES {
+        let path = root.join(filename);
+        if !path.exists() {
+            eprintln!("skipping missing: {}", path.display());
+            continue;
+        }
+        let graph = opengen_gendsp::load_gendsp(&path, &opts)
+            .unwrap_or_else(|e| panic!("{}: {}", filename, e));
+        let count = graph.nodes().count();
+        assert!(count > 0, "{}: graph has no nodes", filename);
+        eprintln!("{}: {} nodes", filename, count);
+    }
+}
+
+#[test]
+fn compile_crossover() {
+    let root = std::path::Path::new("reference/gen/examples");
+    if !root.exists() {
+        eprintln!("skipping: reference/ directory not available");
+        return;
+    }
+    let path = root.join("crossover.gendsp");
+    if !path.exists() {
+        eprintln!("skipping missing: crossover.gendsp");
+        return;
+    }
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![root.to_path_buf()] };
+    let graph = opengen_gendsp::load_gendsp(&path, &opts).unwrap();
+    let mut patch = opengen_compile::compile(&graph, &opengen_ops::Registry::core(), 48000.0).unwrap();
+    let frame = patch.process(&[1.0]);
+    // Just verify it produces output without crashing
+    assert!(frame.len() > 0, "crossover should have outputs");
+    eprintln!("crossover compiled OK, {} outputs, first sample: {}", frame.len(), frame[0]);
+}
+
+#[test]
+fn compile_freeverb_comb() {
+    let root = std::path::Path::new("reference/gen/examples");
+    if !root.exists() {
+        eprintln!("skipping: reference/ directory not available");
+        return;
+    }
+    let path = root.join("freeverb_comb.gendsp");
+    if !path.exists() {
+        eprintln!("skipping missing: freeverb_comb.gendsp");
+        return;
+    }
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![root.to_path_buf()] };
+    let graph = opengen_gendsp::load_gendsp(&path, &opts).unwrap();
+    let mut patch = opengen_compile::compile(&graph, &opengen_ops::Registry::core(), 48000.0).unwrap();
+    let frame = patch.process(&[1.0, 0.5, 0.3, 0.7]);
+    assert!(frame.len() > 0, "freeverb_comb should have outputs");
+    eprintln!("freeverb_comb compiled OK, {} outputs, first sample: {}", frame.len(), frame[0]);
+}
+
+// ─── Search path resolution test ───────────────────────────────────
+
+#[test]
+fn abstraction_search_path_resolution() {
+    let dir = std::env::temp_dir().join("opengen_test_search_path");
+    let _ = std::fs::create_dir_all(&dir);
+
+    // Create a leaf abstraction file
+    let leaf_path = dir.join("leaf.gendsp");
+    let leaf_content = br#"{
+        "patcher": {
+            "fileversion": 1,
+            "boxes": [
+                {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                {"box": {"id": "o2", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+            ],
+            "lines": [
+                {"patchline": {"source": ["o1", 0], "destination": ["o2", 0]}}
+            ]
+        }
+    }"#;
+    std::fs::write(&leaf_path, leaf_content).unwrap();
+
+    // Create a host file that references "leaf" as an abstraction
+    let host_path = dir.join("host.gendsp");
+    let host_content = format!(
+        r#"{{
+            "patcher": {{
+                "fileversion": 1,
+                "boxes": [
+                    {{"box": {{"id": "i1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}}}},
+                    {{"box": {{"id": "sub", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "text": "leaf"}}}},
+                    {{"box": {{"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}}}
+                ],
+                "lines": [
+                    {{"patchline": {{"source": ["i1", 0], "destination": ["sub", 0]}}}},
+                    {{"patchline": {{"source": ["sub", 0], "destination": ["o1", 0]}}}}
+                ]
+            }}
+        }}"#
+    );
+    std::fs::write(&host_path, host_content.as_bytes()).unwrap();
+
+    // Load with search_paths pointing to dir
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![dir.clone()] };
+    let graph = opengen_gendsp::load_gendsp(&host_path, &opts).unwrap();
+    assert!(graph.nodes().count() > 0, "search path abstraction should work");
+
+    // Render to verify signal passes through
+    let out = opengen_testkit::render_graph_with_inputs(&graph, 48000.0, &[&[99.0]], 1);
+    assert_eq!(out.ch(0), &[99.0], "abstraction via search path should passthrough");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ─── Include-cycle error test ──────────────────────────────────────
+
+#[test]
+fn include_cycle_detection() {
+    let dir = std::env::temp_dir().join("opengen_test_cycle");
+    let _ = std::fs::create_dir_all(&dir);
+
+    // Create a.gendsp that references b
+    let a_content = br#"{
+        "patcher": {
+            "fileversion": 1,
+            "boxes": [
+                {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                {"box": {"id": "sub", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "text": "b"}},
+                {"box": {"id": "o2", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+            ],
+            "lines": [
+                {"patchline": {"source": ["o1", 0], "destination": ["sub", 0]}},
+                {"patchline": {"source": ["sub", 0], "destination": ["o2", 0]}}
+            ]
+        }
+    }"#;
+    std::fs::write(dir.join("a.gendsp"), a_content).unwrap();
+
+    // Create b.gendsp that references a (forming a cycle)
+    let b_content = br#"{
+        "patcher": {
+            "fileversion": 1,
+            "boxes": [
+                {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                {"box": {"id": "sub", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "text": "a"}},
+                {"box": {"id": "o2", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+            ],
+            "lines": [
+                {"patchline": {"source": ["o1", 0], "destination": ["sub", 0]}},
+                {"patchline": {"source": ["sub", 0], "destination": ["o2", 0]}}
+            ]
+        }
+    }"#;
+    std::fs::write(dir.join("b.gendsp"), b_content).unwrap();
+
+    // Load a.gendsp — should detect the cycle
+    let path = dir.join("a.gendsp");
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![dir.clone()] };
+    let result = opengen_gendsp::load_gendsp(&path, &opts);
+    match result {
+        Err(opengen_gendsp::GendspError::Cycle(msg)) => {
+            assert!(msg.contains("a") || msg.contains("b") || msg.contains("cycle"),
+                "cycle error should mention cycle: {}", msg);
+            eprintln!("cycle detected: {}", msg);
+        }
+        other => panic!("expected Cycle error, got: {:?}", other),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
