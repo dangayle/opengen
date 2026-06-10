@@ -20,7 +20,8 @@ pub enum BoxKind {
     /// `out N [name…]` — patcher outlet (1-based N)
     Outlet(u16),
     /// `param NAME [default…] [@min e] [@max e]` — parameter
-    Param(String),
+    /// The f64 is the default value parsed from the box text (defaults to 0.0 if missing).
+    Param(String, f64),
     /// `setparam NAME` — D13 rewiring
     SetParam(String),
     /// Constant value: `f V` or bare numeric text (`0.5`, `75`)
@@ -42,9 +43,13 @@ pub enum BoxKind {
     /// `mc_channel` — constant 1.0 (D14)
     McChannel,
     /// Named operator (in the op registry). Positional args fill trailing inlets.
+    /// `args` are numeric literals; `expr_args` are non-numeric arg tokens (e.g. `twopi/samplerate`,
+    /// a param name) that must be parsed as GenExpr expressions at build time.
     Operator {
         name: String,
         args: Vec<f64>,
+        /// Raw text of non-numeric positional args (expression args, param-name args)
+        expr_args: Vec<String>,
         attrs: Vec<(String, String)>,
     },
 }
@@ -59,7 +64,7 @@ pub fn classify_box_text(text: &str) -> BoxKind {
     let tokens: Vec<&str> = text.split_whitespace().collect();
     if tokens.is_empty() {
         // Empty text → treat as constant 0.0? Or just a passthrough?
-        return BoxKind::Operator { name: String::new(), args: vec![], attrs: vec![] };
+        return BoxKind::Operator { name: String::new(), args: vec![], expr_args: vec![], attrs: vec![] };
     }
 
     let (cmd, rest) = {
@@ -79,8 +84,18 @@ pub fn classify_box_text(text: &str) -> BoxKind {
     // ── Param ──────────────────────────────────────────────────────
     if cmd == "param" && !rest.is_empty() {
         let name = rest[0];
-        // Parse default value if present (next token before @)
-        return BoxKind::Param(name.to_string());
+        // Parse default value if present (2nd positional arg)
+        let default = if rest.len() > 1 {
+            let raw_default = rest[1];
+            if raw_default.starts_with('@') {
+                0.0
+            } else {
+                raw_default.parse::<f64>().unwrap_or(0.0)
+            }
+        } else {
+            0.0
+        };
+        return BoxKind::Param(name.to_string(), default);
     }
 
     // ── setparam ───────────────────────────────────────────────────
@@ -153,6 +168,7 @@ pub fn classify_box_text(text: &str) -> BoxKind {
     // ── Operator (default) ─────────────────────────────────────────
     // Split positional args from @-prefixed attribute tokens
     let mut args = Vec::new();
+    let mut expr_args = Vec::new();
     let mut attrs = Vec::new();
     let mut i = 0;
     while i < rest.len() {
@@ -172,12 +188,15 @@ pub fn classify_box_text(text: &str) -> BoxKind {
             // Positional arg — try to parse as f64
             if let Ok(n) = parse_f64_token(rest[i]) {
                 args.push(n);
+            } else {
+                // Non-numeric arg — keep as expression string
+                expr_args.push(rest[i].to_string());
             }
             i += 1;
         }
     }
 
-    BoxKind::Operator { name: cmd.to_string(), args, attrs }
+    BoxKind::Operator { name: cmd.to_string(), args, expr_args, attrs }
 }
 
 /// Try to parse an I/O port: `in N [name…]` or `out N [name…]`.
@@ -261,13 +280,13 @@ mod tests {
     #[test]
     fn classify_param() {
         assert_eq!(classify_box_text("param freq 600 @min 1 @max samplerate/2"),
-                   BoxKind::Param("freq".to_string()));
+                   BoxKind::Param("freq".to_string(), 600.0));
         assert_eq!(classify_box_text("param spread 0 @min 0 @max 400"),
-                   BoxKind::Param("spread".to_string()));
+                   BoxKind::Param("spread".to_string(), 0.0));
         assert_eq!(classify_box_text("param dampen 0.25"),
-                   BoxKind::Param("dampen".to_string()));
+                   BoxKind::Param("dampen".to_string(), 0.25));
         assert_eq!(classify_box_text("param pitch"),
-                   BoxKind::Param("pitch".to_string()));
+                   BoxKind::Param("pitch".to_string(), 0.0));
     }
 
     // ── setparam ───────────────────────────────────────────────────
@@ -389,16 +408,17 @@ mod tests {
     #[test]
     fn classify_operator_add() {
         let kind = classify_box_text("+");
-        assert_eq!(kind, BoxKind::Operator { name: "+".to_string(), args: vec![], attrs: vec![] });
+        assert_eq!(kind, BoxKind::Operator { name: "+".to_string(), args: vec![], expr_args: vec![], attrs: vec![] });
     }
 
     #[test]
     fn classify_operator_slide() {
         let kind = classify_box_text("slide 200 200");
         match kind {
-            BoxKind::Operator { name, args, .. } => {
+            BoxKind::Operator { name, args, expr_args, .. } => {
                 assert_eq!(name, "slide");
                 assert_eq!(args, vec![200.0, 200.0]);
+                assert!(expr_args.is_empty());
             }
             other => panic!("expected Operator, got {:?}", other),
         }
@@ -408,9 +428,10 @@ mod tests {
     fn classify_operator_with_attrs() {
         let kind = classify_box_text("lookup @interp linear");
         match kind {
-            BoxKind::Operator { name, args, attrs } => {
+            BoxKind::Operator { name, args, expr_args, attrs } => {
                 assert_eq!(name, "lookup");
                 assert!(args.is_empty());
+                assert!(expr_args.is_empty());
                 assert_eq!(attrs, vec![("@interp".to_string(), "linear".to_string())]);
             }
             other => panic!("expected Operator, got {:?}", other),
@@ -421,9 +442,10 @@ mod tests {
     fn classify_operator_subtract_with_constant() {
         let kind = classify_box_text("!- 1");
         match kind {
-            BoxKind::Operator { name, args, .. } => {
+            BoxKind::Operator { name, args, expr_args, .. } => {
                 assert_eq!(name, "!-");
                 assert_eq!(args, vec![1.0]);
+                assert!(expr_args.is_empty());
             }
             other => panic!("expected Operator, got {:?}", other),
         }
@@ -487,7 +509,7 @@ mod tests {
                     let kind = classify_box_text(&bx.text);
                     // Every newobj with text should produce a meaningful BoxKind
                     match &kind {
-                        BoxKind::Operator { name, .. } => {
+                        BoxKind::Operator { name, expr_args: _, .. } => {
                             assert!(!name.is_empty(), "{}: empty operator name in '{}'",
                                     path.display(), bx.text);
                         }

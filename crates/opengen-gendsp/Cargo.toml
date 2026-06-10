@@ -8,3 +8,8 @@ license.workspace = true
 opengen-ir.workspace = true
 opengen-ops.workspace = true
 opengen-genexpr.workspace = true
+
+[dev-dependencies]
+opengen-testkit.workspace = true
+opengen-ops.workspace = true
+opengen-ir.workspace = true

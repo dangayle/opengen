@@ -13,3 +13,4 @@
 pub mod json;
 pub mod model;
 pub mod boxtext;
+pub mod build;

@@ -225,8 +225,8 @@ struct DelayInfo {
     written: bool,
 }
 
-pub struct Lowerer<'a> {
-    graph: Graph,
+pub struct Lowerer<'a, 'b> {
+    graph: &'b mut Graph,
     registry: &'a Registry,
     /// Maps identifier names to their output ports
     bindings: HashMap<String, Port>,
@@ -240,10 +240,10 @@ pub struct Lowerer<'a> {
     delay_counter: u32,
 }
 
-impl<'a> Lowerer<'a> {
-    pub fn new(registry: &'a Registry) -> Self {
+impl<'a, 'b> Lowerer<'a, 'b> {
+    pub fn new(registry: &'a Registry, graph: &'b mut Graph) -> Self {
         Self {
-            graph: Graph::new(),
+            graph,
             registry,
             bindings: HashMap::new(),
             region_stateful_idx: Cell::new(0),
@@ -252,7 +252,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    pub fn lower(mut self, program: &Program) -> Result<Graph, LowerError> {
+    pub fn lower(&mut self, program: &Program) -> Result<(), LowerError> {
         // Check if any statement (including inside blocks) has control flow.
         if has_program_control_flow(&program.statements) {
             return self.lower_to_region(program);
@@ -261,7 +261,173 @@ impl<'a> Lowerer<'a> {
         for stmt in &program.statements {
             self.lower_statement(stmt)?;
         }
-        Ok(self.graph)
+        Ok(())
+    }
+
+    /// Lower embedded into an existing graph with pre-seeded bindings.
+    ///
+    /// Unlike `lower()` which creates Input/Output nodes, this method:
+    /// - Accepts pre-seeded bindings for inN ports (pointing into the host graph)
+    /// - Returns output ports (outN → Port) instead of creating Output nodes
+    /// - All other nodes (constants, ops, params, builtins) are added to the host graph
+    ///
+    /// Control-flow programs produce a Region node added to the host graph.
+    /// Straight-line programs produce individual nodes in the host graph.
+    pub fn lower_embedded(
+        &mut self,
+        program: &Program,
+        seeded_inputs: HashMap<String, Port>,
+    ) -> Result<Vec<(u16, Port)>, LowerError> {
+        // Pre-seed bindings with the provided input ports
+        for (name, port) in seeded_inputs {
+            self.bindings.insert(name, port);
+        }
+
+        let out_ports = if has_program_control_flow(&program.statements) {
+            // Region path: lower_to_region creates a Region node, wires inputs/outputs.
+            // We need an adapted version that doesn't create Input/Output nodes.
+            self.lower_embedded_region(program)?
+        } else {
+            // Straight-line path: lower statements, capture outN ports
+            self.lower_embedded_straightline(program)?
+        };
+
+        Ok(out_ports)
+    }
+
+    /// Lower straight-line code and capture outN ports.
+    fn lower_embedded_straightline(
+        &mut self,
+        program: &Program,
+    ) -> Result<Vec<(u16, Port)>, LowerError> {
+        let mut out_ports: Vec<(u16, Port)> = Vec::new();
+
+        for stmt in &program.statements {
+            match &stmt.kind {
+                StatementKind::Assign { name, expr } => {
+                    if let Some(output_idx) = parse_output_name(name) {
+                        // outN assignment: lower expr, capture port (no Output node)
+                        let port = self.lower_expr(expr)?;
+                        out_ports.push((output_idx, port));
+                        self.bindings.insert(name.clone(), port);
+                    } else {
+                        // Normal assignment
+                        self.try_lower_statement(stmt)?;
+                    }
+                }
+                _ => {
+                    self.try_lower_statement(stmt)?;
+                }
+            }
+        }
+
+        Ok(out_ports)
+    }
+
+    /// Lower program with control flow into a Region node embedded in the host graph.
+    fn lower_embedded_region(
+        &mut self,
+        program: &Program,
+    ) -> Result<Vec<(u16, Port)>, LowerError> {
+        self.region_stateful_idx.set(0);
+
+        // ---- Pass 1: collect metadata ----
+        let mut meta = RegionMeta::new();
+        for stmt in &program.statements {
+            self.collect_region_meta(stmt, &mut meta)?;
+        }
+
+        // ---- Build graph-level nodes - BUT don't create Input/Output nodes ----
+
+        // Param nodes: create a node for each Param decl, wire to region input.
+        let mut param_ports: Vec<(u16, Port)> = Vec::new();
+        for (param_idx, (name, default)) in meta.params.iter().enumerate() {
+            let node_id = self.graph.add_node(Node::param(name, *default));
+            let port = Port { node: node_id, index: 0 };
+            // Don't override pre-seeded bindings (e.g., from param boxes in the patcher)
+            self.bindings.entry(name.clone()).or_insert(port);
+            self.graph.bind(name.clone(), node_id);
+            param_ports.push((param_idx as u16, port));
+        }
+
+        // Input nodes: check if pre-seeded, don't create new ones.
+        // The meta.in_refs tells us which inN are referenced; we seed them
+        // from self.bindings (which was pre-populated by the caller).
+        let mut input_ports: Vec<(u16, Port)> = Vec::new();
+        let base = meta.params.len() as u16;
+        for (i, &in_idx) in meta.in_refs.iter().enumerate() {
+            let name = format!("in{}", in_idx + 1);
+            if let Some(&port) = self.bindings.get(&name) {
+                // Pre-seeded by caller — use as-is
+                input_ports.push((base + i as u16, port));
+            } else {
+                // Not seeded — create an Input node in the host graph
+                let node_id = self.graph.add_node(Node::input(in_idx));
+                let port = Port { node: node_id, index: 0 };
+                self.bindings.insert(name, port);
+                input_ports.push((base + i as u16, port));
+            }
+        }
+
+        // Data/Buffer nodes: create a graph-level Data node for each decl.
+        for (name, size) in &meta.data_decls {
+            let node_id = self.graph.add_node(Node::data(name, *size));
+            let port = Port { node: node_id, index: 0 };
+            // Don't override pre-seeded bindings
+            self.bindings.entry(name.clone()).or_insert(port);
+            self.graph.bind(name.clone(), node_id);
+        }
+
+        // ---- Build ProcRegion - same as lower_to_region ----
+
+        let n_inputs = meta.n_inputs();
+        let n_outputs = meta.n_outputs();
+        let n_locals = meta.locals.len() as u32;
+        let n_state = meta.n_state();
+        let state_init = meta.state_init();
+
+        let mut input_port_of: HashMap<String, u16> = HashMap::new();
+        for (name, _) in &meta.params {
+            input_port_of.insert(name.clone(), meta.param_port(name).unwrap());
+        }
+        for &in_idx in &meta.in_refs {
+            let name = format!("in{}", in_idx + 1);
+            if let Some(port) = meta.in_port(in_idx) {
+                input_port_of.insert(name, port);
+            }
+        }
+
+        let mut body: Vec<proc::PStmt> = Vec::new();
+        for stmt in &program.statements {
+            let stmts = self.lower_region_stmt(stmt, &meta, &input_port_of)?;
+            body.extend(stmts);
+        }
+
+        let region = proc::ProcRegion {
+            n_inputs,
+            n_outputs,
+            n_locals,
+            n_state,
+            state_init,
+            body,
+        };
+
+        let region_id = self.graph.add_node(Node::region(region));
+
+        // ---- Wire graph edges ----
+        for (port_idx, param_port) in &param_ports {
+            self.graph.connect(*param_port, Port { node: region_id, index: *port_idx });
+        }
+        for (port_idx, in_port) in &input_ports {
+            self.graph.connect(*in_port, Port { node: region_id, index: *port_idx });
+        }
+
+        // ---- Collect output ports (don't create Output nodes) ----
+        let out_ports: Vec<(u16, Port)> = meta.outputs.iter().map(|&out_idx| {
+            (out_idx, Port { node: region_id, index: out_idx })
+        }).collect();
+
+        Ok(out_ports)
     }
 
     // ─────────────────────────────────────────────────────────
@@ -274,7 +440,7 @@ impl<'a> Lowerer<'a> {
     /// the ENTIRE program body lowers into ONE Region node. Graph-level nodes
     /// remain only: Input nodes (for inN), Param nodes (for params), the Region,
     /// and Output nodes.
-    fn lower_to_region(&mut self, program: &Program) -> Result<Graph, LowerError> {
+    fn lower_to_region(&mut self, program: &Program) -> Result<(), LowerError> {
         self.region_stateful_idx.set(0);
 
         // ---- Pass 1: collect metadata ----
@@ -379,7 +545,7 @@ impl<'a> Lowerer<'a> {
             );
         }
 
-        Ok(std::mem::take(&mut self.graph))
+        Ok(())
     }
 
     // ─────────────────────────────────────────────────────────
@@ -1835,12 +2001,55 @@ fn has_stmt_control_flow(stmt: &Statement) -> bool {
 pub fn lower(program: &Program) -> Result<Graph, LowerError> {
     let mut program = program.clone();
     // Run inline pass first: user-defined functions, return, multi-assign.
-    // This must happen BEFORE the control-flow check so that inlined code
-    // with control flow triggers the region path, and so that all
-    // FuncDecl/Return/MultiAssign nodes are gone before lowering.
     crate::inline::inline_functions(&mut program)?;
     let registry = Registry::core();
-    Lowerer::new(&registry).lower(&program)
+    let mut graph = Graph::new();
+    let mut lowerer = Lowerer::new(&registry, &mut graph);
+    lowerer.lower(&program)?;
+    Ok(graph)
+}
+
+/// Lower a GenExpr program into an existing graph without creating Input or Output nodes.
+///
+/// Takes pre-seeded bindings for inN ports (pointing into the host graph).
+/// Returns a list of (out_index_0based, port) pairs for each `outN` assignment.
+///
+/// This is used for codebox splicing in the `.gendsp` graph builder: a codebox's
+/// `in1`/`in2` references map to wired input ports from the host graph, and
+/// `out1`/`out2` assignments produce ports wired into the host graph.
+///
+/// Control-flow programs produce a [`NodeKind::Region`] node in the host graph.
+/// Straight-line programs produce individual nodes in the host graph.
+///
+/// ```
+/// use opengen_genexpr::{parse, lower_embedded};
+/// use opengen_ir::{Graph, Node, Port, NodeId};
+/// use std::collections::HashMap;
+///
+/// let src = "out1 = in1 + 1;";
+/// let prog = parse(src).unwrap();
+///
+/// let mut graph = Graph::new();
+/// let in1_node = graph.add_node(Node::input(0));
+/// let in1_port = Port { node: in1_node, index: 0 };
+///
+/// let mut inputs = HashMap::new();
+/// inputs.insert("in1".to_string(), in1_port);
+///
+/// let outputs = lower_embedded(&prog, &inputs, &mut graph, &opengen_ops::Registry::core()).unwrap();
+/// assert_eq!(outputs.len(), 1);
+/// assert_eq!(outputs[0].0, 0); // out1 → index 0
+/// ```
+pub fn lower_embedded(
+    program: &Program,
+    seeded_inputs: &HashMap<String, Port>,
+    graph: &mut Graph,
+    registry: &Registry,
+) -> Result<Vec<(u16, Port)>, LowerError> {
+    let mut program = program.clone();
+    crate::inline::inline_functions(&mut program)?;
+    let mut lowerer = Lowerer::new(registry, graph);
+    lowerer.lower_embedded(&program, seeded_inputs.clone())
 }
 
 // ---------------------------------------------------------------------------
