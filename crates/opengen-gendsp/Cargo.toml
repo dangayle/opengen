@@ -1,0 +1,10 @@
+[package]
+name = "opengen-gendsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+opengen-ir.workspace = true
+opengen-ops.workspace = true
+opengen-genexpr.workspace = true

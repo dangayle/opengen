@@ -243,6 +243,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "opengen-gendsp"
+version = "0.1.0"
+dependencies = [
+ "opengen-genexpr",
+ "opengen-ir",
+ "opengen-ops",
+]
+
+[[package]]
 name = "opengen-genexpr"
 version = "0.1.0"
 dependencies = [

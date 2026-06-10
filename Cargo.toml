@@ -14,3 +14,4 @@ opengen-genexpr = { path = "crates/opengen-genexpr" }
 opengen-compile = { path = "crates/opengen-compile" }
 opengen-testkit = { path = "crates/opengen-testkit" }
 opengen-analysis = { path = "crates/opengen-analysis" }
+opengen-gendsp = { path = "crates/opengen-gendsp" }
