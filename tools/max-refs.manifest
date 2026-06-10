@@ -1,0 +1,8 @@
+# license	source (relative to /Applications/Max.app/Contents/Resources)	dest (relative to reference/)
+eula	C74/packages/RNBO/server/node_modules/@rnbo/genexpr_js	rnbo/genexpr_js
+eula	C74/packages/RNBO/source/operators	rnbo/operators
+mit	C74/packages/RNBO/source/rnbo	rnbo/core-mit
+eula	C74/packages/Gen/docs/refpages	gen/refpages
+eula	C74/docs/userguide/content/gen	gen/userguide
+eula	Examples/gen	gen/examples
+eula	C74/help/msp	max/help-msp
