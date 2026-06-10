@@ -7,6 +7,9 @@ pub struct OpDef {
     pub name: &'static str,
     pub arity: u16,
     pub state: StateDecl,
+    /// If true, the compile layer emits a StateUpdate step copying inputs[0] → state[0].
+    /// If false, the kernel manages its own state internally.
+    pub auto_state_update: bool,
     pub kernel: Kernel,
 }
 
@@ -19,6 +22,7 @@ impl Registry {
         for def in crate::compare::defs() { ops.insert(def.name, def); }
         for def in crate::range::defs() { ops.insert(def.name, def); }
         for def in crate::state::defs() { ops.insert(def.name, def); }
+        for def in crate::osc::defs() { ops.insert(def.name, def); }
         Registry { ops }
     }
     pub fn get(&self, name: &str) -> Option<&OpDef> { self.ops.get(name) }
@@ -34,6 +38,7 @@ mod tests {
         let op = reg.get("add").expect("add registered");
         assert_eq!(op.arity, 2);
         assert_eq!(op.state, opengen_ir::StateDecl::None);
+        assert_eq!(op.auto_state_update, true);
         assert_eq!((op.kernel)(&[1.5, 2.25], &mut [], 48_000.0), 3.75);
     }
 }

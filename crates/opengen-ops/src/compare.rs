@@ -132,11 +132,11 @@ pub fn neq(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 
 pub fn defs() -> Vec<OpDef> {
     vec![
-        OpDef { name: "gt", arity: 2, state: StateDecl::None, kernel: gt },
-        OpDef { name: "gte", arity: 2, state: StateDecl::None, kernel: gte },
-        OpDef { name: "lt", arity: 2, state: StateDecl::None, kernel: lt },
-        OpDef { name: "lte", arity: 2, state: StateDecl::None, kernel: lte },
-        OpDef { name: "eq", arity: 2, state: StateDecl::None, kernel: eq },
-        OpDef { name: "neq", arity: 2, state: StateDecl::None, kernel: neq },
+        OpDef { name: "gt", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: gt },
+        OpDef { name: "gte", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: gte },
+        OpDef { name: "lt", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: lt },
+        OpDef { name: "lte", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: lte },
+        OpDef { name: "eq", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: eq },
+        OpDef { name: "neq", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: neq },
     ]
 }

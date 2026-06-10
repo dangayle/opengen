@@ -5,4 +5,5 @@ pub mod math;
 pub mod compare;
 pub mod range;
 pub mod state;
+pub mod osc;
 pub use registry::{Registry, OpDef, Kernel};

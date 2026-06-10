@@ -168,10 +168,10 @@ pub fn mix(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 
 pub fn defs() -> Vec<OpDef> {
     vec![
-        OpDef { name: "clip", arity: 3, state: StateDecl::None, kernel: clip },
-        OpDef { name: "wrap", arity: 3, state: StateDecl::None, kernel: wrap },
-        OpDef { name: "fold", arity: 3, state: StateDecl::None, kernel: fold },
-        OpDef { name: "scale", arity: 5, state: StateDecl::None, kernel: scale },
-        OpDef { name: "mix", arity: 3, state: StateDecl::None, kernel: mix },
+        OpDef { name: "clip", arity: 3, state: StateDecl::None, auto_state_update: true, kernel: clip },
+        OpDef { name: "wrap", arity: 3, state: StateDecl::None, auto_state_update: true, kernel: wrap },
+        OpDef { name: "fold", arity: 3, state: StateDecl::None, auto_state_update: true, kernel: fold },
+        OpDef { name: "scale", arity: 5, state: StateDecl::None, auto_state_update: true, kernel: scale },
+        OpDef { name: "mix", arity: 3, state: StateDecl::None, auto_state_update: true, kernel: mix },
     ]
 }

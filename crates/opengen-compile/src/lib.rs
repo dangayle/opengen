@@ -225,8 +225,7 @@ pub fn compile(g: &Graph, reg: &Registry, sr: f64) -> Result<Patch, CompileError
                 let state_range = state_ranges.get(&id).cloned().unwrap_or(0..0);
                 
                 if *state != StateDecl::None {
-                    // Stateful node: emit compute step now (reads old state),
-                    // defer state update to end (writes current input)
+                    // Stateful node: emit compute step now (reads old state)
                     steps.push(Step {
                         kind: StepKind::Compute {
                             kernel: op_def.kernel,
@@ -236,14 +235,20 @@ pub fn compile(g: &Graph, reg: &Registry, sr: f64) -> Result<Patch, CompileError
                         value_slot,
                     });
                     
-                    // Defer state update: copy input[0] to state[0]
-                    stateful_updates.push(Step {
-                        kind: StepKind::StateUpdate {
-                            input_slot: input_slots[0],
-                            state_range,
-                        },
-                        value_slot, // Not actually written to, but needed for struct
-                    });
+                    // Only emit StateUpdate for operators that use the automatic
+                    // input[0] → state[0] copy mechanism (e.g., history).
+                    // Operators with self-managed state (e.g., phasor, noise)
+                    // handle their state updates within the kernel.
+                    if op_def.auto_state_update {
+                        // Defer state update: copy input[0] to state[0]
+                        stateful_updates.push(Step {
+                            kind: StepKind::StateUpdate {
+                                input_slot: input_slots[0],
+                                state_range,
+                            },
+                            value_slot, // Not actually written to, but needed for struct
+                        });
+                    }
                 } else {
                     // Stateless op: just compute
                     steps.push(Step {
