@@ -23,9 +23,8 @@ use opengen_ir::StateDecl;
 /// # Documented
 /// `reference/gen/refpages/dsp/gen_dsp_sah.maxref.xml`
 ///
-/// Description confirms: "When the control makes a transition from being at or
-/// below the trigger value to being above the trigger threshold, the input is
-/// sampled."
+/// Description confirms the Schmitt trigger behavior: the input is sampled when
+/// the control signal transitions from at-or-below the threshold to strictly above it.
 ///
 /// ```
 /// use opengen_testkit::render_with_inputs;
@@ -179,7 +178,8 @@ pub fn change(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
 /// # Documented
 /// `reference/gen/refpages/dsp/gen_dsp_accum.maxref.xml`
 ///
-/// Description: "adds to, and then outputs, an internal sum". Default
+/// The operator increments an internal sum by the input value and outputs the
+/// result. Default
 /// `resetmode='post'`: reset happens after the accumulation step.
 ///
 /// ```
@@ -272,7 +272,7 @@ pub fn defs() -> Vec<OpDef> {
 
 #[cfg(test)]
 mod tests {
-    use opengen_testkit::{render, render_with_inputs, render_with_inputs_n};
+    use opengen_testkit::{render_with_inputs, render_with_inputs_n};
     use super::*;
 
     // ── sah ─────────────────────────────────────────────────────

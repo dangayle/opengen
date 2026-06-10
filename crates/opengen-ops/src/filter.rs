@@ -87,9 +87,9 @@ pub fn slide(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     let y_prev = state[0];
 
     let rate = if x > y_prev {
-        1.0 / up.max(1.0)
+        1.0 / up.abs().max(1.0)
     } else {
-        1.0 / down.max(1.0)
+        1.0 / down.abs().max(1.0)
     };
 
     let y = y_prev + rate * (x - y_prev);
@@ -218,5 +218,15 @@ mod tests {
         let result = slide(&[0.0, 1.0, 4.0], &mut state, 48000.0);
         // rate = 1/4 = 0.25, y = 1.0 + 0.25*(0-1.0) = 0.75
         assert!((result - 0.75).abs() < 1e-15);
+    }
+
+    #[test]
+    fn slide_negative_times_use_abs() {
+        // Negative up/down should use abs(): slide(x, -5, -5) behaves like slide(x, 5, 5)
+        // Step 0→1 with up=-5 → abs(-5)=5 → rate = 1/5 = 0.2 → y = 0 + 0.2*(1-0) = 0.2
+        let mut state = [0.0];
+        let result = slide(&[1.0, -5.0, -5.0], &mut state, 48000.0);
+        assert!((result - 0.2).abs() < 1e-15,
+            "slide(-5) should behave like slide(5): expected 0.2, got {}", result);
     }
 }
