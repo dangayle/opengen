@@ -231,6 +231,127 @@ pub fn ceil(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
     inputs[0].ceil()
 }
 
+/// Exponential: `out = exp(x)` = e^x.
+///
+/// # Definition
+/// Delegates to `f64::exp(x)`. IEEE-754 f64 exponential function.
+///
+/// # Documented
+/// `reference/gen/refpages/common/gen_common_exp.maxref.xml`
+///
+/// ```
+/// use opengen_testkit::render;
+/// let out = render("out1 = exp(1.0);", 48000.0, 1);
+/// assert_eq!(out.ch(0)[0], 1f64.exp());
+/// let out2 = render("out1 = exp(0.0);", 48000.0, 1);
+/// assert_eq!(out2.ch(0)[0], 1.0);
+/// ```
+pub fn exp(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
+    inputs[0].exp()
+}
+
+/// Base-2 exponential: `out = exp2(x)` = 2^x.
+///
+/// # Definition
+/// Delegates to `f64::exp2(x)`. IEEE-754 f64 base-2 exponential.
+///
+/// # Documented
+/// `reference/gen/refpages/common/gen_common_exp2.maxref.xml`
+///
+/// ```
+/// use opengen_testkit::render;
+/// let out = render("out1 = exp2(3.0);", 48000.0, 1);
+/// assert_eq!(out.ch(0)[0], 8.0);
+/// ```
+pub fn exp2(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
+    inputs[0].exp2()
+}
+
+/// Natural logarithm: `out = ln(x)`.
+///
+/// # Definition
+/// Delegates to `f64::ln(x)`. Returns -infinity for x=0, NaN for x<0 per IEEE-754.
+///
+/// # Documented
+/// `reference/gen/refpages/common/gen_common_log.maxref.xml`
+///
+/// ```
+/// use opengen_testkit::render;
+/// let out = render("out1 = ln(1.0);", 48000.0, 1);
+/// assert_eq!(out.ch(0)[0], 0.0);
+/// ```
+pub fn ln(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
+    inputs[0].ln()
+}
+
+/// Natural logarithm (alias): `out = log(x)`.
+///
+/// # Definition
+/// Alias of `ln`. The refpage states "natural logarithm". Delegates to `f64::ln(x)`.
+///
+/// # Documented
+/// `reference/gen/refpages/common/gen_common_log.maxref.xml`
+///
+/// ```
+/// use opengen_testkit::render;
+/// let out = render("out1 = log(1.0);", 48000.0, 1);
+/// assert_eq!(out.ch(0)[0], 0.0);
+/// ```
+pub fn log(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
+    inputs[0].ln()
+}
+
+/// Base-2 logarithm: `out = log2(x)`.
+///
+/// # Definition
+/// Delegates to `f64::log2(x)`. IEEE-754 f64 base-2 logarithm.
+///
+/// # Documented
+/// `reference/gen/refpages/common/gen_common_log2.maxref.xml`
+///
+/// ```
+/// use opengen_testkit::render;
+/// let out = render("out1 = log2(8.0);", 48000.0, 1);
+/// assert_eq!(out.ch(0)[0], 3.0);
+/// ```
+pub fn log2(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
+    inputs[0].log2()
+}
+
+/// Base-10 logarithm: `out = log10(x)`.
+///
+/// # Definition
+/// Delegates to `f64::log10(x)`. IEEE-754 f64 base-10 logarithm.
+///
+/// # Documented
+/// `reference/gen/refpages/common/gen_common_log10.maxref.xml`
+///
+/// ```
+/// use opengen_testkit::render;
+/// let out = render("out1 = log10(1000.0);", 48000.0, 1);
+/// assert_eq!(out.ch(0)[0], 3.0);
+/// ```
+pub fn log10(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
+    inputs[0].log10()
+}
+
+/// Hypotenuse: `out = hypot(a, b)` = sqrt(a² + b²).
+///
+/// # Definition
+/// Delegates to `f64::hypot(b)`. Computes Euclidean distance without overflow/underflow.
+///
+/// # Documented
+/// `reference/gen/refpages/common/gen_common_hypot.maxref.xml`
+///
+/// ```
+/// use opengen_testkit::render;
+/// let out = render("out1 = hypot(3.0, 4.0);", 48000.0, 1);
+/// assert_eq!(out.ch(0)[0], 5.0);
+/// ```
+pub fn hypot(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
+    inputs[0].hypot(inputs[1])
+}
+
 pub fn defs() -> Vec<OpDef> {
     vec![
         OpDef { name: "add", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: add },
@@ -246,5 +367,30 @@ pub fn defs() -> Vec<OpDef> {
         OpDef { name: "sqrt", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: sqrt },
         OpDef { name: "floor", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: floor },
         OpDef { name: "ceil", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: ceil },
+        OpDef { name: "exp", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: exp },
+        OpDef { name: "exp2", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: exp2 },
+        OpDef { name: "ln", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: ln },
+        OpDef { name: "log", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: log },
+        OpDef { name: "log2", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: log2 },
+        OpDef { name: "log10", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: log10 },
+        OpDef { name: "hypot", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: hypot },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use opengen_testkit::render;
+
+    #[test]
+    fn ln_negative_returns_nan() {
+        let out = render("out1 = ln(0.0 - 1.0);", 48000.0, 1);
+        assert!(out.ch(0)[0].is_nan());
+    }
+
+    #[test]
+    fn ln_zero_returns_neg_inf() {
+        let out = render("out1 = ln(0.0);", 48000.0, 1);
+        assert!(out.ch(0)[0].is_infinite());
+        assert!(out.ch(0)[0].is_sign_negative());
+    }
 }
