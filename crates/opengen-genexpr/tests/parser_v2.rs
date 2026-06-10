@@ -657,6 +657,44 @@ fn invalid_operator_is_parse_error() {
 }
 
 #[test]
+fn empty_return_parses() {
+    let ast = parse("return;").unwrap();
+    match &ast.statements[0].kind {
+        StatementKind::Return(v) => {
+            assert!(v.is_empty(), "expected empty return value vec");
+        }
+        other => panic!("expected Return, got {other:?}"),
+    }
+}
+
+#[test]
+fn chained_member_calls_nest() {
+    let ast = parse("x = a.b(1).d(2);").unwrap();
+    match &ast.statements[0].kind {
+        StatementKind::Assign { expr, .. } => {
+            match expr {
+                Expr::MemberCall { object, method: outer_method, args: outer_args, .. } => {
+                    assert_eq!(outer_method, "d");
+                    assert_eq!(outer_args.len(), 1);
+                    assert!(matches!(outer_args[0], Expr::Number(2.0)));
+                    match &**object {
+                        Expr::MemberCall { object: inner_obj, method: inner_method, args: inner_args, .. } => {
+                            assert_eq!(inner_method, "b");
+                            assert_eq!(inner_args.len(), 1);
+                            assert!(matches!(inner_args[0], Expr::Number(1.0)));
+                            assert!(matches!(**inner_obj, Expr::Ident(ref s) if s == "a"));
+                        }
+                        other => panic!("expected inner MemberCall, got {other:?}"),
+                    }
+                }
+                other => panic!("expected MemberCall at top, got {other:?}"),
+            }
+        }
+        other => panic!("expected Assign, got {other:?}"),
+    }
+}
+
+#[test]
 fn return_outside_function_parses_ok_lowering_rejects() {
     // Return is syntactically valid anywhere — lowering rejects it
     let ast = parse("return 1;").unwrap();

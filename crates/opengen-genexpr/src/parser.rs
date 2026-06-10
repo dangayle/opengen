@@ -68,7 +68,7 @@ impl Parser {
         let mut statements = Vec::new();
 
         while self.current != Token::Eof {
-            statements.push(self.parse_statement(false)?);
+            statements.push(self.parse_statement()?);
         }
 
         // Bare-final-expression sugar is handled at parse-expr time:
@@ -84,9 +84,10 @@ impl Parser {
     //  Statement parsing
     // ═══════════════════════════════════════════════════════════════════
 
-    /// Parse one statement. `in_function_body` affects return/break/continue acceptance
-    /// (they parse successfully regardless; lowering enforces restrictions).
-    fn parse_statement(&mut self, _in_function_body: bool) -> Result<Statement, String> {
+    /// Parse one statement.
+    /// All jump statements (break/continue/return) parse successfully anywhere;
+    /// lowering enforces placement restrictions (e.g., return only valid in function body).
+    fn parse_statement(&mut self) -> Result<Statement, String> {
         let loc = self.current_loc;
 
         match &self.current.clone() {
@@ -423,7 +424,7 @@ impl Parser {
         self.expect(Token::LBrace)?;
         let mut statements = Vec::new();
         while self.current != Token::RBrace && self.current != Token::Eof {
-            statements.push(self.parse_statement(true)?);
+            statements.push(self.parse_statement()?);
         }
         self.expect(Token::RBrace)?;
         Ok(Statement { kind: StatementKind::Block(statements), loc })
@@ -436,12 +437,12 @@ impl Parser {
         let cond = self.parse_expr()?;
         self.expect(Token::RParen)?;
 
-        let then_branch = Box::new(self.parse_statement(true)?);
+        let then_branch = Box::new(self.parse_statement()?);
 
         let else_branch = if self.current == Token::Else {
             self.advance()?; // consume 'else'
             // Check for 'else if'
-            let else_stmt = self.parse_statement(true)?;
+            let else_stmt = self.parse_statement()?;
             Some(Box::new(else_stmt))
         } else {
             None
@@ -459,14 +460,14 @@ impl Parser {
         self.expect(Token::LParen)?;
         let cond = self.parse_expr()?;
         self.expect(Token::RParen)?;
-        let body = Box::new(self.parse_statement(true)?);
+        let body = Box::new(self.parse_statement()?);
         Ok(Statement { kind: StatementKind::While { cond, body }, loc })
     }
 
     /// Parse do body while (cond);
     fn parse_do_while(&mut self, loc: SourceLoc) -> Result<Statement, String> {
         self.advance()?; // consume 'do'
-        let body = Box::new(self.parse_statement(true)?);
+        let body = Box::new(self.parse_statement()?);
         self.expect(Token::While)?;
         self.expect(Token::LParen)?;
         let cond = self.parse_expr()?;
@@ -482,7 +483,7 @@ impl Parser {
 
         // Init: parse expression statement or empty
         let init = if self.current != Token::Semicolon {
-            Some(Box::new(self.parse_statement(true)?))
+            Some(Box::new(self.parse_statement()?))
         } else {
             None
         };
@@ -505,7 +506,7 @@ impl Parser {
         let step = self.parse_for_step()?;
         self.expect(Token::RParen)?;
 
-        let body = Box::new(self.parse_statement(true)?);
+        let body = Box::new(self.parse_statement()?);
 
         Ok(Statement {
             kind: StatementKind::For { init, cond, step, body },
@@ -617,7 +618,7 @@ impl Parser {
 
         let mut body = Vec::new();
         while self.current != Token::RBrace && self.current != Token::Eof {
-            body.push(self.parse_statement(true)?);
+            body.push(self.parse_statement()?);
         }
         self.expect(Token::RBrace)?;
 
@@ -1021,13 +1022,12 @@ impl Parser {
     /// Returns None if the current token doesn't start a named argument.
     fn try_parse_named_arg(&mut self) -> Result<Option<(String, Expr)>, String> {
         // Check if we have: Identifier then Equals
-        let saved_lexer = self.lexer.clone();
         let saved_current = self.current.clone();
 
         match &saved_current {
             Token::Ident(name) => {
-                // Peek ahead
-                let mut peek = saved_lexer;
+                // Peek ahead with a clone so we don't consume
+                let mut peek = self.lexer.clone();
                 match peek.next_token() {
                     Ok(sp) if sp.tok == Token::Equals => {
                         // It IS a named arg. Consume the identifier and '='.
