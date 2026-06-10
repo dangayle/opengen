@@ -2,6 +2,7 @@
 
 pub use response::{impulse_response, freq_response, spectrum, Response, Spectrum};
 pub mod wav;
+pub mod plot;
 
 mod response;
 

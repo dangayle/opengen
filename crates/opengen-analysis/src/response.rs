@@ -13,6 +13,11 @@ pub struct Response {
 }
 
 impl Response {
+    /// Return the Nyquist frequency (sample rate / 2).
+    pub fn nyquist(&self) -> f64 {
+        self.sr / 2.0
+    }
+    
     /// Return the magnitude response in dB at the given frequency.
     ///
     /// # Valid Range

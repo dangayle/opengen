@@ -1,0 +1,17 @@
+[package]
+name = "opengen-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "opengen"
+path = "src/main.rs"
+
+[dependencies]
+opengen-testkit = { workspace = true }
+opengen-genexpr = { workspace = true }
+opengen-compile = { workspace = true }
+opengen-ops = { workspace = true }
+opengen-analysis = { workspace = true }
+clap = { version = "4", features = ["derive"] }
