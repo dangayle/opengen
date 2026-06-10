@@ -6,7 +6,7 @@
 
 opengen is an independent, open implementation compatible with the GenExpr language used by Cycling '74's gen~. Built from scratch in Rust, it provides a complete pipeline from `.genexpr` source to compiled DSP patches with first-class testing and analysis tools.
 
-**Not affiliated with or endorsed by Cycling '74.** This is a clean-room implementation focused on testability, extensibility, and reproducibility.
+**Not affiliated with or endorsed by Cycling '74.** This is an independent implementation — original code only, with documented provenance for every behavioral claim — focused on testability, extensibility, and reproducibility.
 
 ## Quick Start
 
