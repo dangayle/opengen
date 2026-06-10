@@ -11,4 +11,5 @@ pub mod convert;
 pub mod bitwise;
 pub mod memory;
 pub mod filter;
+pub mod sample;
 pub use registry::{Registry, OpDef, Kernel, UpdateFn, InitFn};
