@@ -9,4 +9,5 @@ pub mod osc;
 pub mod trig;
 pub mod convert;
 pub mod bitwise;
+pub mod memory;
 pub use registry::{Registry, OpDef, Kernel, UpdateFn, InitFn};

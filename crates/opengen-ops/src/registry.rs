@@ -36,6 +36,7 @@ impl Registry {
         for def in crate::trig::defs() { ops.insert(def.name, def); }
         for def in crate::convert::defs() { ops.insert(def.name, def); }
         for def in crate::bitwise::defs() { ops.insert(def.name, def); }
+        for def in crate::memory::defs() { ops.insert(def.name, def); }
         Registry { ops }
     }
     pub fn get(&self, name: &str) -> Option<&OpDef> { self.ops.get(name) }

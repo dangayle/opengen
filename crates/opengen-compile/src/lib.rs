@@ -292,6 +292,7 @@ fn lower_region_expr(
     locals_base: usize,
     sr: f64,
     input_slots: &[usize],
+    data_ranges: &HashMap<String, std::ops::Range<usize>>,
 ) -> Result<RExpr, CompileError> {
     match expr {
         proc::PExpr::Const(v) => Ok(RExpr::Const(*v)),
@@ -306,13 +307,6 @@ fn lower_region_expr(
             state_base,
             data_ref,
         } => {
-            // Data regions land in Task 17.
-            if data_ref.is_some() {
-                return Err(CompileError(
-                    "data regions (peek/poke) land in Task 17".into(),
-                ));
-            }
-
             let op_def = reg.get(op).ok_or_else(|| {
                 CompileError(format!("unknown operator in region: '{}'", op))
             })?;
@@ -329,10 +323,18 @@ fn lower_region_expr(
 
             let lowered_args: Vec<RExpr> = args
                 .iter()
-                .map(|a| lower_region_expr(a, reg, slot_of, region_state_base, locals_base, sr, input_slots))
+                .map(|a| lower_region_expr(a, reg, slot_of, region_state_base, locals_base, sr, input_slots, data_ranges))
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let state_range = if *state_base != u32::MAX {
+            // Resolve state range: if data_ref is set, use the named data's range.
+            let state_range = if let Some(data_name) = data_ref {
+                data_ranges.get(data_name).cloned().ok_or_else(|| {
+                    CompileError(format!(
+                        "unknown data reference '{}' in region op '{}'",
+                        data_name, op
+                    ))
+                })?
+            } else if *state_base != u32::MAX {
                 let size = match op_def.state {
                     StateDecl::Slots(n) => n as usize,
                     StateDecl::None => 0,
@@ -362,10 +364,11 @@ fn lower_region_stmt(
     sr: f64,
     out_slots: &[usize],
     input_slots: &[usize],
+    data_ranges: &HashMap<String, std::ops::Range<usize>>,
 ) -> Result<RStep, CompileError> {
     match stmt {
         proc::PStmt::SetLocal { dst, expr } => {
-            let e = lower_region_expr(expr, reg, slot_of, region_state_base, locals_base, sr, input_slots)?;
+            let e = lower_region_expr(expr, reg, slot_of, region_state_base, locals_base, sr, input_slots, data_ranges)?;
             Ok(RStep::SetLocal {
                 dst: locals_base + *dst as usize,
                 expr: e,
@@ -373,16 +376,16 @@ fn lower_region_stmt(
         }
         proc::PStmt::SetOut { index, expr } => {
             let slot = out_slots[*index as usize];
-            let e = lower_region_expr(expr, reg, slot_of, region_state_base, locals_base, sr, input_slots)?;
+            let e = lower_region_expr(expr, reg, slot_of, region_state_base, locals_base, sr, input_slots, data_ranges)?;
             Ok(RStep::SetOut { slot, expr: e })
         }
         proc::PStmt::SetState { index, expr } => {
             let idx = region_state_base + *index as usize;
-            let e = lower_region_expr(expr, reg, slot_of, region_state_base, locals_base, sr, input_slots)?;
+            let e = lower_region_expr(expr, reg, slot_of, region_state_base, locals_base, sr, input_slots, data_ranges)?;
             Ok(RStep::SetState { idx, expr: e })
         }
         proc::PStmt::Eval(expr) => {
-            let e = lower_region_expr(expr, reg, slot_of, region_state_base, locals_base, sr, input_slots)?;
+            let e = lower_region_expr(expr, reg, slot_of, region_state_base, locals_base, sr, input_slots, data_ranges)?;
             Ok(RStep::Eval(e))
         }
         proc::PStmt::If {
@@ -390,9 +393,9 @@ fn lower_region_stmt(
             then_body,
             else_body,
         } => {
-            let cond = lower_region_expr(cond, reg, slot_of, region_state_base, locals_base, sr, input_slots)?;
-            let then_b = lower_region_stmts(then_body, reg, slot_of, region_state_base, locals_base, sr, out_slots, input_slots)?;
-            let else_b = lower_region_stmts(else_body, reg, slot_of, region_state_base, locals_base, sr, out_slots, input_slots)?;
+            let cond = lower_region_expr(cond, reg, slot_of, region_state_base, locals_base, sr, input_slots, data_ranges)?;
+            let then_b = lower_region_stmts(then_body, reg, slot_of, region_state_base, locals_base, sr, out_slots, input_slots, data_ranges)?;
+            let else_b = lower_region_stmts(else_body, reg, slot_of, region_state_base, locals_base, sr, out_slots, input_slots, data_ranges)?;
             Ok(RStep::If {
                 cond,
                 then_b,
@@ -400,8 +403,8 @@ fn lower_region_stmt(
             })
         }
         proc::PStmt::While { cond, body } => {
-            let cond = lower_region_expr(cond, reg, slot_of, region_state_base, locals_base, sr, input_slots)?;
-            let steps = lower_region_stmts(body, reg, slot_of, region_state_base, locals_base, sr, out_slots, input_slots)?;
+            let cond = lower_region_expr(cond, reg, slot_of, region_state_base, locals_base, sr, input_slots, data_ranges)?;
+            let steps = lower_region_stmts(body, reg, slot_of, region_state_base, locals_base, sr, out_slots, input_slots, data_ranges)?;
             Ok(RStep::While { cond, body: steps })
         }
         proc::PStmt::Break => Ok(RStep::Break),
@@ -419,10 +422,11 @@ fn lower_region_stmts(
     sr: f64,
     out_slots: &[usize],
     input_slots: &[usize],
+    data_ranges: &HashMap<String, std::ops::Range<usize>>,
 ) -> Result<Vec<RStep>, CompileError> {
     stmts
         .iter()
-        .map(|s| lower_region_stmt(s, reg, slot_of, region_state_base, locals_base, sr, out_slots, input_slots))
+        .map(|s| lower_region_stmt(s, reg, slot_of, region_state_base, locals_base, sr, out_slots, input_slots, data_ranges))
         .collect()
 }
 
@@ -496,6 +500,18 @@ fn compile_impl(
             let start = state_offset;
             state_offset += n as usize;
             state_ranges.insert(id, start..state_offset);
+        }
+    }
+
+    // Build data_ranges map: data name → state range
+    let mut data_ranges: HashMap<String, std::ops::Range<usize>> = HashMap::new();
+    for (id, node) in g.nodes() {
+        if let NodeKind::Data { name, .. } = &node.kind {
+            if let Some(range) = state_ranges.get(&id) {
+                if data_ranges.insert(name.clone(), range.clone()).is_some() {
+                    return Err(CompileError(format!("duplicate data name: '{}'", name)));
+                }
+            }
         }
     }
 
@@ -671,6 +687,7 @@ fn compile_impl(
                     sr,
                     &out_slots,
                     &input_slots,
+                    &data_ranges,
                 )?;
 
                 steps.push(Step {
@@ -680,6 +697,11 @@ fn compile_impl(
                     },
                     value_slot,
                 });
+            }
+            NodeKind::Data { size, .. } => {
+                // Output the size (dimension) of the data buffer.
+                values[value_slot] = *size as f64;
+                // No step needed; state is already zero-initialized.
             }
             NodeKind::Op { name, .. } => {
                 let op_def = reg
@@ -705,7 +727,18 @@ fn compile_impl(
                     }
                 }
 
-                let state_range = state_ranges.get(&id).cloned().unwrap_or(0..0);
+                // Resolve state range: if data_ref is set, use the named data's range.
+                // Otherwise, use the op node's own state range.
+                let state_range = if let Some(data_name) = node.data_ref() {
+                    data_ranges.get(data_name).cloned().ok_or_else(|| {
+                        CompileError(format!(
+                            "unknown data reference '{}' for operator '{}'",
+                            data_name, name
+                        ))
+                    })?
+                } else {
+                    state_ranges.get(&id).cloned().unwrap_or(0..0)
+                };
 
                 // Always emit compute step
                 steps.push(Step {

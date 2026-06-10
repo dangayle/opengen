@@ -289,17 +289,20 @@ fn param_decl_without_args() {
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn data_decl_not_yet_implemented() {
-    let ast = parse("Data d(1024); out1 = 0;").unwrap();
-    let err = lower(&ast).unwrap_err();
-    assert!(err.msg.contains("not yet implemented"), "got: {}", err.msg);
+fn data_decl_works() {
+    // Data d(1024); creates a Data node with size 1024
+    let graph = lower(&parse("Data d(1024); out1 = 0;").unwrap()).unwrap();
+    // Should have: Data node, Constant(0), Output node
+    let data_count = graph.nodes().filter(|(_, n)| matches!(n.kind, opengen_ir::NodeKind::Data { .. })).count();
+    assert_eq!(data_count, 1);
 }
 
 #[test]
-fn buffer_decl_not_yet_implemented() {
-    let ast = parse("Buffer b(\"foo\"); out1 = 0;").unwrap();
-    let err = lower(&ast).unwrap_err();
-    assert!(err.msg.contains("not yet implemented"), "got: {}", err.msg);
+fn buffer_decl_works_as_data_alias() {
+    // Buffer is an alias for Data in opengen
+    let graph = lower(&parse("Buffer b(1024); out1 = 0;").unwrap()).unwrap();
+    let data_count = graph.nodes().filter(|(_, n)| matches!(n.kind, opengen_ir::NodeKind::Data { .. })).count();
+    assert_eq!(data_count, 1);
 }
 
 #[test]

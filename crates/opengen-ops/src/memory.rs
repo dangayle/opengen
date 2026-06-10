@@ -1,0 +1,205 @@
+//! Data memory operators: peek, poke — read/write named data buffers.
+//!
+//! These operators operate on named data regions declared via `Data` or `Buffer`
+//! declarations. Each data region is an array of f64 values allocated in the
+//! graph's state arena. The `data_ref` field on the IR node carries the data name;
+//! the compiler resolves it to an arena range.
+//!
+//! # D8 Scope (M2)
+//! - Single channel only
+//! - No interpolation (peek truncates index)
+//! - `boundmode ignore` (the default): OOB peek returns 0.0; OOB poke writes nothing
+//! - Replace-write: poke overwrites the sample (no overdub)
+//!
+//! # Divergence
+//! gen~ peek/poke support multi-channel buffers with interpolation attributes
+//! (`@interp linear/cubic/spline`), index modes (`@index phase/lookup/wave`),
+//! bound modes (`@boundmode wrap/fold/clip`), channel modes, and overdub modes.
+//! These are M3+ backlog items. M2 implements the minimal single-channel,
+//! no-interpolation, boundmode-ignore / replace-write subset.
+
+use crate::registry::OpDef;
+use opengen_ir::StateDecl;
+
+/// Read a value from a data buffer: `out = peek(name, index)`.
+///
+/// # Definition
+/// Returns `state[floor(index)]` if `0 <= floor(index) < state.len()`,
+/// otherwise returns `0.0`. No interpolation — truncates the index toward zero.
+///
+/// # Documented
+/// `reference/gen/refpages/dsp/gen_dsp_peek.maxref.xml`: first argument names a
+/// data/buffer; second argument (inlet) is the sample index. Default `@boundmode`
+/// is `ignore` (OOB returns 0). Default `@interp` is `none`.
+///
+/// # M2 Limitation
+/// gen~ supports multiple peek attributes (@interp, @index, @boundmode, @channelmode,
+/// @channels) that are not implemented in M2. See module-level docs for backlog.
+///
+/// # Determinism
+/// Within-sample read ordering follows topological order with ascending-NodeId ties
+/// (the graph-level determinism contract). A poke at an earlier-ordered node is
+/// visible to a later-ordered peek in the same sample.
+///
+/// ```
+/// use opengen_testkit::render;
+/// // Basic round-trip: poke then peek in data d(4)
+/// let out = render("Data d(4); poke(d, 42.0, 1); out1 = peek(d, 1);", 48000.0, 1);
+/// assert_eq!(out.ch(0)[0], 42.0);
+///
+/// // OOB peek returns 0
+/// let out2 = render("Data d(4); out1 = peek(d, 9);", 48000.0, 1);
+/// assert_eq!(out2.ch(0)[0], 0.0);
+///
+/// // Negative index OOB returns 0
+/// let out3 = render("Data d(4); out1 = peek(d, -1);", 48000.0, 1);
+/// assert_eq!(out3.ch(0)[0], 0.0);
+///
+/// // Poke at negative index writes nothing (OOB)
+/// let out4 = render("Data d(4); poke(d, 99.0, -1); out1 = peek(d, 0);", 48000.0, 1);
+/// assert_eq!(out4.ch(0)[0], 0.0);
+///
+/// // Poke at size-boundary writes nothing (OOB: index == size)
+/// let out5 = render("Data d(4); poke(d, 99.0, 4); out1 = peek(d, 3);", 48000.0, 1);
+/// assert_eq!(out5.ch(0)[0], 0.0);
+///
+/// // Data node output = size
+/// let out6 = render("Data d(4); out1 = d;", 48000.0, 1);
+/// assert_eq!(out6.ch(0)[0], 4.0);
+/// ```
+pub fn peek(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
+    let idx = inputs[0] as i64;
+    if idx >= 0 && (idx as usize) < state.len() {
+        state[idx as usize]
+    } else {
+        0.0
+    }
+}
+
+/// Write a value into a data buffer: `poke(name, value, index)`.
+///
+/// # Definition
+/// If `0 <= floor(index) < state.len()`, sets `state[floor(index)] = value`.
+/// Otherwise, no write occurs (`boundmode ignore`). Always returns 0.0 (sink).
+///
+/// Replace-write: the new value overwrites the old value (no overdub/accum).
+///
+/// # Documented
+/// `reference/gen/refpages/dsp/gen_dsp_poke.maxref.xml`: first argument names a
+/// data/buffer; first inlet (signal) is the value; second inlet is the position.
+/// Default `@boundmode` is `ignore` (OOB writes nothing). Default `@overdubmode`
+/// is `accum` in gen~; M2 uses replace-write (divergence documented below).
+///
+/// # Divergence
+/// gen~ `poke` supports overdub modes (`@overdubmode accum` by default, `@overdubmode mix`)
+/// and a separate overdub signal inlet. M2 uses replace-write (the tagged D8 scope)
+/// — the new value replaces the old value unconditionally. Overdub is M3+.
+///
+/// ```
+/// use opengen_testkit::render;
+/// // Basic write: poke(d, 42.0, 1) writes 42 at index 1
+/// let out = render("Data d(4); poke(d, 42.0, 1); out1 = peek(d, 1);", 48000.0, 1);
+/// assert_eq!(out.ch(0)[0], 42.0);
+///
+/// // OOB poke writes nothing
+/// let out2 = render("Data d(4); poke(d, 99.0, 9); out1 = peek(d, 0);", 48000.0, 1);
+/// assert_eq!(out2.ch(0)[0], 0.0);
+///
+/// // Multiple pokes to same index: last one wins (replace-write)
+/// let out3 = render("Data d(4); poke(d, 1.0, 0); poke(d, 2.0, 0); out1 = peek(d, 0);", 48000.0, 1);
+/// assert_eq!(out3.ch(0)[0], 2.0);
+/// ```
+pub fn poke(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
+    let value = inputs[0];
+    let idx = inputs[1] as i64;
+    if idx >= 0 && (idx as usize) < state.len() {
+        state[idx as usize] = value;
+    }
+    0.0
+}
+
+pub fn defs() -> Vec<OpDef> {
+    vec![
+        OpDef {
+            name: "peek",
+            arity: 1,
+            state: StateDecl::None,
+            deferred_ports: &[],
+            update: None,
+            init: None,
+            kernel: peek,
+        },
+        OpDef {
+            name: "poke",
+            arity: 2,
+            state: StateDecl::None,
+            deferred_ports: &[],
+            update: None,
+            init: None,
+            kernel: poke,
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peek_oob_negative_index() {
+        let result = peek(&[-1.0], &mut [10.0, 20.0, 30.0], 48000.0);
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn peek_oob_beyond_length() {
+        let result = peek(&[5.0], &mut [10.0, 20.0, 30.0], 48000.0);
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn peek_truncates_float_index() {
+        let mut state = [10.0, 20.0, 30.0];
+        assert_eq!(peek(&[0.9], &mut state, 48000.0), 10.0); // truncates to 0
+        assert_eq!(peek(&[1.2], &mut state, 48000.0), 20.0); // truncates to 1
+        assert_eq!(peek(&[1.99], &mut state, 48000.0), 20.0); // truncates to 1
+    }
+
+    #[test]
+    fn poke_oob_negative_index_writes_nothing() {
+        let mut state = [0.0; 4];
+        poke(&[42.0, -1.0], &mut state, 48000.0);
+        assert_eq!(state[0], 0.0);
+    }
+
+    #[test]
+    fn poke_oob_beyond_length_writes_nothing() {
+        let mut state = [0.0; 4];
+        poke(&[42.0, 4.0], &mut state, 48000.0);
+        assert_eq!(state[3], 0.0); // last element unchanged
+    }
+
+    #[test]
+    fn poke_replace_write() {
+        let mut state = [0.0, 0.0, 0.0];
+        poke(&[10.0, 1.0], &mut state, 48000.0);
+        assert_eq!(state[1], 10.0);
+        // Write again to same index — replaces
+        poke(&[20.0, 1.0], &mut state, 48000.0);
+        assert_eq!(state[1], 20.0);
+    }
+
+    #[test]
+    fn poke_returns_zero() {
+        let mut state = [0.0; 4];
+        let result = poke(&[42.0, 0.0], &mut state, 48000.0);
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn peek_oob_on_negative_float_index() {
+        // Large negative floats — truncated to i64, -1.5 → -1 (OOB), -0.1 → 0 (in bounds)
+        assert_eq!(peek(&[-1.5], &mut [10.0], 48000.0), 0.0);
+        assert_eq!(peek(&[-2.0], &mut [10.0], 48000.0), 0.0);
+    }
+}

@@ -18,7 +18,8 @@ pub enum NodeKind {
     Param { name: String, default: f64 },
     Input(u16),
     Output(u16),
-    Op { name: String, args: Vec<f64>, state: StateDecl },
+    Data { name: String, size: usize },
+    Op { name: String, args: Vec<f64>, state: StateDecl, data_ref: Option<String> },
     Region(proc::ProcRegion),
 }
 
@@ -33,7 +34,13 @@ impl Node {
         Node { kind: NodeKind::Param { name: name.into(), default } }
     }
     pub fn op(name: &str, args: Vec<f64>, state: StateDecl) -> Self {
-        Node { kind: NodeKind::Op { name: name.into(), args, state } }
+        Node { kind: NodeKind::Op { name: name.into(), args, state, data_ref: None } }
+    }
+    pub fn op_with_data(name: &str, args: Vec<f64>, state: StateDecl, data_ref: &str) -> Self {
+        Node { kind: NodeKind::Op { name: name.into(), args, state, data_ref: Some(data_ref.into()) } }
+    }
+    pub fn data(name: &str, size: usize) -> Self {
+        Node { kind: NodeKind::Data { name: name.into(), size } }
     }
     pub fn region(r: proc::ProcRegion) -> Self {
         Node { kind: NodeKind::Region(r) }
@@ -44,8 +51,16 @@ impl Node {
     pub fn state(&self) -> StateDecl {
         match &self.kind {
             NodeKind::Op { state, .. } => *state,
+            NodeKind::Data { size, .. } => StateDecl::Slots(*size as u32),
             NodeKind::Region(r) => StateDecl::Slots(r.n_state),
             _ => StateDecl::None,
+        }
+    }
+    /// Returns the data_ref of an Op node, if any.
+    pub fn data_ref(&self) -> Option<&str> {
+        match &self.kind {
+            NodeKind::Op { data_ref, .. } => data_ref.as_deref(),
+            _ => None,
         }
     }
 }

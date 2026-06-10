@@ -81,6 +81,8 @@ struct RegionMeta {
     stateful_ops: Vec<StatefulOpInfo>,
     /// Cumulative state offset (after all History slots + previously allocated stateful ops).
     next_state_base: u32,
+    /// Data/Buffer declarations: (name, size).
+    data_decls: Vec<(String, usize)>,
 }
 
 /// Info about a stateful op call inside a region.
@@ -107,6 +109,7 @@ impl RegionMeta {
             outputs: Vec::new(),
             stateful_ops: Vec::new(),
             next_state_base: 0,
+            data_decls: Vec::new(),
         }
     }
 
@@ -290,6 +293,14 @@ impl<'a> Lowerer<'a> {
             input_ports.push((base + i as u16, port));
         }
 
+        // Data/Buffer nodes: create a graph-level Data node for each decl.
+        for (name, size) in &meta.data_decls {
+            let node_id = self.graph.add_node(Node::data(name, *size));
+            let port = Port { node: node_id, index: 0 };
+            self.bindings.insert(name.clone(), port);
+            self.graph.bind(name.clone(), node_id);
+        }
+
         // ---- Build ProcRegion ----
 
         let n_inputs = meta.n_inputs();
@@ -398,6 +409,16 @@ impl<'a> Lowerer<'a> {
                         0.0
                     };
                     meta.add_history(&item.name, init)?;
+                }
+                Ok(())
+            }
+            StatementKind::Decl { ty: DeclType::Data | DeclType::Buffer, items } => {
+                for item in items {
+                    let size = item.args.first().map(|e| match e {
+                        Expr::Number(n) => *n as usize,
+                        _ => 512,
+                    }).unwrap_or(512);
+                    meta.data_decls.push((item.name.clone(), size));
                 }
                 Ok(())
             }
@@ -586,6 +607,10 @@ impl<'a> Lowerer<'a> {
             }
             StatementKind::Decl { ty: DeclType::History, .. } => {
                 // History decls are already registered in state; no PStmt needed.
+                Ok(vec![])
+            }
+            StatementKind::Decl { ty: DeclType::Data | DeclType::Buffer, .. } => {
+                // Data/Buffer decls are handled in collect_region_meta; no PStmt needed.
                 Ok(vec![])
             }
             StatementKind::Decl { .. } => {
@@ -882,6 +907,69 @@ impl<'a> Lowerer<'a> {
                     });
                 }
 
+                // Special case: peek/poke — first arg is a data name (identifier), not a value.
+                if name == "peek" || name == "poke" {
+                    if args.is_empty() {
+                        return Err(LowerError {
+                            msg: format!("function '{}' requires a data name as first argument", name),
+                            loc: None,
+                        });
+                    }
+                    let data_name = match &args[0] {
+                        Expr::Ident(n) => n.clone(),
+                        _ => return Err(LowerError {
+                            msg: format!("first argument to '{}' must be a data name (identifier), got expression", name),
+                            loc: None,
+                        }),
+                    };
+                    // Verify the data name exists (as a Data/Buffer decl) in the graph.
+                    if self.bindings.get(&data_name).is_none() && meta.local_slot(&data_name).is_none() {
+                        return Err(LowerError {
+                            msg: format!("unknown data buffer '{}' in '{}'", data_name, name),
+                            loc: None,
+                        });
+                    }
+
+                    let op_def = self.registry.get(name).ok_or_else(|| LowerError {
+                        msg: format!("unknown function: {}", name),
+                        loc: None,
+                    })?;
+
+                    let signal_args = &args[1..];
+                    if signal_args.len() != op_def.arity as usize {
+                        return Err(LowerError {
+                            msg: format!(
+                                "function '{}' expects {} signal arguments, got {}",
+                                name, op_def.arity, signal_args.len()
+                            ),
+                            loc: None,
+                        });
+                    }
+
+                    let mut lowered_args: Vec<proc::PExpr> = Vec::new();
+                    for arg in signal_args {
+                        lowered_args.push(self.lower_region_expr(arg, meta, input_port_of)?);
+                    }
+
+                    // Check for stateful ops — peek/poke are stateless (state comes from data_ref).
+                    if op_def.update.is_some() || !op_def.deferred_ports.is_empty() {
+                        return Err(LowerError {
+                            msg: format!(
+                                "operator '{}' with deferred updates cannot be called inside a region",
+                                name
+                            ),
+                            loc: None,
+                        });
+                    }
+
+                    return Ok(proc::PExpr::Call {
+                        op: name.clone(),
+                        args: lowered_args,
+                        state_base: u32::MAX,
+                        data_ref: Some(data_name),
+                    });
+                }
+
                 // Check for history(…) CALL inside region — this is an error.
                 if name == "history" {
                     return Err(LowerError {
@@ -1060,6 +1148,19 @@ impl<'a> Lowerer<'a> {
                     let port = Port { node: node_id, index: 0 };
                     self.bindings.insert(item.name.clone(), port);
                     self.graph.bind(item.name.clone(), node_id);
+                }
+                Ok(())
+            }
+            StatementKind::Decl { ty: DeclType::Data | DeclType::Buffer, items } => {
+                for item in items {
+                    let size = item.args.first().map(|e| match e {
+                        Expr::Number(n) => *n as usize,
+                        _ => 512,
+                    }).unwrap_or(512);
+                    let data_node = self.graph.add_node(Node::data(&item.name, size));
+                    let port = Port { node: data_node, index: 0 };
+                    self.bindings.insert(item.name.clone(), port);
+                    self.graph.bind(item.name.clone(), data_node);
                 }
                 Ok(())
             }
@@ -1330,6 +1431,56 @@ impl<'a> Lowerer<'a> {
                         loc: None,
                     });
                 }
+
+                // Special case: peek/poke — first arg is a data name (identifier), not a value.
+                if name == "peek" || name == "poke" {
+                    if args.is_empty() {
+                        return Err(LowerError {
+                            msg: format!("function '{}' requires a data name as first argument", name),
+                            loc: None,
+                        });
+                    }
+                    let data_name = match &args[0] {
+                        Expr::Ident(n) => n.clone(),
+                        _ => return Err(LowerError {
+                            msg: format!("first argument to '{}' must be a data name (identifier), got expression", name),
+                            loc: None,
+                        }),
+                    };
+                    // Verify the data name exists in bindings
+                    if !self.bindings.contains_key(&data_name) {
+                        return Err(LowerError {
+                            msg: format!("unknown data buffer '{}' in '{}'", data_name, name),
+                            loc: None,
+                        });
+                    }
+
+                    let op_def = self.registry.get(name)
+                        .ok_or_else(|| LowerError { msg: format!("unknown function: {}", name), loc: None })?;
+
+                    let signal_args = &args[1..]; // skip data name
+                    if signal_args.len() != op_def.arity as usize {
+                        return Err(LowerError {
+                            msg: format!(
+                                "function '{}' expects {} signal arguments, got {}",
+                                name, op_def.arity, signal_args.len()
+                            ),
+                            loc: None,
+                        });
+                    }
+
+                    let op_node = self.graph.add_node(Node::op_with_data(
+                        name, vec![], op_def.state, &data_name
+                    ));
+
+                    for (i, arg) in signal_args.iter().enumerate() {
+                        let arg_port = self.lower_expr(arg)?;
+                        self.graph.connect(arg_port, Port { node: op_node, index: i as u16 });
+                    }
+
+                    return Ok(Port { node: op_node, index: 0 });
+                }
+
                 let op_def = self.registry.get(name)
                     .ok_or_else(|| LowerError { msg: format!("unknown function: {}", name), loc: None })?;
 
