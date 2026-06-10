@@ -1,6 +1,6 @@
 //! Lower AST to IR Graph
 
-use crate::ast::*;
+use crate::ast::{*, UnaryOp};
 use opengen_ir::{Graph, Node, Port, StateDecl};
 use opengen_ops::Registry;
 use std::collections::HashMap;
@@ -58,44 +58,94 @@ impl<'a> Lowerer<'a> {
                 let node_id = self.graph.add_node(Node::param(name, *default));
                 let port = Port { node: node_id, index: 0 };
                 self.bindings.insert(name.clone(), port);
-                // Record user-visible param binding in graph
                 self.graph.bind(name.clone(), node_id);
                 Ok(())
             }
+            StatementKind::Decl { ty: DeclType::Param, items } => {
+                // Fold Param declarations into M1-compat lowering
+                for item in items {
+                    let default = item.args.first().map(|e| match e {
+                        Expr::Number(n) => *n,
+                        _ => 0.0, // fallback; named args ignored at runtime in M2
+                    }).unwrap_or(0.0);
+                    let node_id = self.graph.add_node(Node::param(&item.name, default));
+                    let port = Port { node: node_id, index: 0 };
+                    self.bindings.insert(item.name.clone(), port);
+                    self.graph.bind(item.name.clone(), node_id);
+                }
+                Ok(())
+            }
+            StatementKind::Decl { ty: DeclType::History, .. } => {
+                Err(LowerError {
+                    msg: "History declarations not yet implemented in lowering (Task 13)".to_string(),
+                    loc: None,
+                })
+            }
+            StatementKind::Decl { ty, .. } => {
+                Err(LowerError {
+                    msg: format!("{:?} declarations not yet implemented", ty),
+                    loc: None,
+                })
+            }
             StatementKind::Assign { name, expr } => {
-                // Check if this is a stateful self-reference pattern
                 let is_stateful_self_ref = self.is_stateful_self_reference(name, expr);
-                
                 if is_stateful_self_ref {
-                    // Pre-bind the name to enable self-reference
-                    // We'll create the node and bind it before lowering arguments
                     self.lower_stateful_assign(name, expr)
                 } else {
-                    // Normal assignment: lower expr, then bind
                     let port = self.lower_expr(expr)?;
-                    
-                    // Handle output nodes specially
                     if let Some(output_index) = parse_output_name(name) {
                         let out_node = self.graph.add_node(Node::output(output_index));
                         self.graph.connect(port, Port { node: out_node, index: 0 });
                     }
-                    
-                    // Bind the name (allows re-use in later expressions)
                     self.bindings.insert(name.clone(), port);
-                    
-                    // Record user-visible binding in graph (exclude outputs and synthetic names)
                     if !is_synthetic_name(name) && parse_output_name(name).is_none() {
                         self.graph.bind(name.clone(), port.node);
                     }
                     Ok(())
                 }
             }
+            StatementKind::If { .. } => {
+                Err(LowerError { msg: "if statements not yet implemented (Task 14–15)".to_string(), loc: None })
+            }
+            StatementKind::While { .. } => {
+                Err(LowerError { msg: "while loops not yet implemented (Task 14–15)".to_string(), loc: None })
+            }
+            StatementKind::DoWhile { .. } => {
+                Err(LowerError { msg: "do-while loops not yet implemented (Task 14–15)".to_string(), loc: None })
+            }
+            StatementKind::For { .. } => {
+                Err(LowerError { msg: "for loops not yet implemented (Task 14–15)".to_string(), loc: None })
+            }
+            StatementKind::Block(_) => {
+                Err(LowerError { msg: "block statements not yet implemented (Task 14–15)".to_string(), loc: None })
+            }
+            StatementKind::Break => {
+                Err(LowerError { msg: "break not yet implemented (Task 14–15)".to_string(), loc: None })
+            }
+            StatementKind::Continue => {
+                Err(LowerError { msg: "continue not yet implemented (Task 14–15)".to_string(), loc: None })
+            }
+            StatementKind::Return(_) => {
+                Err(LowerError { msg: "return not yet implemented (Task 14–16)".to_string(), loc: None })
+            }
+            StatementKind::MultiAssign { .. } => {
+                Err(LowerError { msg: "multi-assign not yet implemented (Task 16)".to_string(), loc: None })
+            }
+            StatementKind::FuncDecl { .. } => {
+                Err(LowerError { msg: "function declarations not yet implemented (Task 16)".to_string(), loc: None })
+            }
+            StatementKind::Require(_) => {
+                Err(LowerError { msg: "require unsupported in M2".to_string(), loc: None })
+            }
+            StatementKind::ExprStmt(_) => {
+                Err(LowerError { msg: "expression statements not yet implemented (Task 13+)".to_string(), loc: None })
+            }
         }
     }
 
     fn is_stateful_self_reference(&self, name: &str, expr: &Expr) -> bool {
         // Check if expr is a call to a stateful op that references 'name'
-        if let Expr::Call { name: op_name, args } = expr {
+        if let Expr::Call { name: op_name, args, .. } = expr {
             // Check if the op is stateful
             if let Some(op_def) = self.registry.get(op_name) {
                 if op_def.state != StateDecl::None {
@@ -113,15 +163,21 @@ impl<'a> Lowerer<'a> {
             Expr::BinOp { left, right, .. } => {
                 self.expr_references(left, name) || self.expr_references(right, name)
             }
-            Expr::UnaryMinus(e) => self.expr_references(e, name),
+            Expr::Unary(_, e) => self.expr_references(e, name),
             Expr::Call { args, .. } => args.iter().any(|arg| self.expr_references(arg, name)),
-            Expr::Number(_) => false,
+            Expr::Number(_) | Expr::Str(_) => false,
+            Expr::MemberCall { args, .. } => args.iter().any(|arg| self.expr_references(arg, name)),
+            Expr::Ternary { cond, true_expr, false_expr } => {
+                self.expr_references(cond, name)
+                    || self.expr_references(true_expr, name)
+                    || self.expr_references(false_expr, name)
+            }
         }
     }
 
     fn lower_stateful_assign(&mut self, name: &str, expr: &Expr) -> Result<(), LowerError> {
         // Pre-create the op node and pre-bind it
-        if let Expr::Call { name: op_name, args } = expr {
+        if let Expr::Call { name: op_name, args, .. } = expr {
             let op_def = self.registry.get(op_name)
                 .ok_or_else(|| LowerError { msg: format!("unknown operator: {}", op_name), loc: None })?;
             
@@ -210,23 +266,34 @@ impl<'a> Lowerer<'a> {
                 
                 Ok(Port { node: op_node, index: 0 })
             }
-            Expr::UnaryMinus(e) => {
+            Expr::Unary(UnaryOp::Neg, e) => {
                 // Unary minus: multiply by -1
                 let zero_node = self.graph.add_node(Node::constant(0.0));
                 let zero_port = Port { node: zero_node, index: 0 };
-                
                 let expr_port = self.lower_expr(e)?;
-                
                 let sub_def = self.registry.get("sub")
                     .ok_or_else(|| LowerError { msg: "'sub' operator not available (needed for unary minus)".to_string(), loc: None })?;
-                
                 let sub_node = self.graph.add_node(Node::op("sub", vec![], sub_def.state));
                 self.graph.connect(zero_port, Port { node: sub_node, index: 0 });
                 self.graph.connect(expr_port, Port { node: sub_node, index: 1 });
-                
                 Ok(Port { node: sub_node, index: 0 })
             }
-            Expr::Call { name, args } => {
+            Expr::Unary(UnaryOp::Not, e) => {
+                // !expr → not(expr)
+                let expr_port = self.lower_expr(e)?;
+                let op_def = self.registry.get("not")
+                    .ok_or_else(|| LowerError { msg: "'not' operator not available".to_string(), loc: None })?;
+                let op_node = self.graph.add_node(Node::op("not", vec![], op_def.state));
+                self.graph.connect(expr_port, Port { node: op_node, index: 0 });
+                Ok(Port { node: op_node, index: 0 })
+            }
+            Expr::Call { name, args, named_args } => {
+                if !named_args.is_empty() {
+                    return Err(LowerError {
+                        msg: format!("named arguments not yet implemented for '{}'", name),
+                        loc: None,
+                    });
+                }
                 let op_def = self.registry.get(name)
                     .ok_or_else(|| LowerError { msg: format!("unknown function: {}", name), loc: None })?;
                 
@@ -248,6 +315,15 @@ impl<'a> Lowerer<'a> {
                 }
                 
                 Ok(Port { node: op_node, index: 0 })
+            }
+            Expr::MemberCall { .. } => {
+                Err(LowerError { msg: "member calls not yet implemented".to_string(), loc: None })
+            }
+            Expr::Ternary { .. } => {
+                Err(LowerError { msg: "ternary not yet implemented".to_string(), loc: None })
+            }
+            Expr::Str(_) => {
+                Err(LowerError { msg: "string literals not supported in runtime expressions".to_string(), loc: None })
             }
         }
     }

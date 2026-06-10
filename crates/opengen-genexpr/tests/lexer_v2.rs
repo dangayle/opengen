@@ -7,7 +7,6 @@ fn comments_and_numeric_forms() {
 }
 
 #[test]
-#[ignore = "parser v2 (Task 12)"]
 fn new_operator_tokens_parse() {
     parse("out1 = (1 < 2) && !(3 > 4) || (1 ^^ 0);").unwrap();
     parse("out1 = (5 & 3) | (1 ^ 2) + (1 << 2) + (8 >> 1);").unwrap();

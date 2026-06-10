@@ -12,6 +12,8 @@ fn parses_param_and_call() {
 }
 
 #[test]
-fn rejects_unknown_statement() {
-    assert!(parse("for (;;) {}").is_err()); // not in M1 scope — clear error
+fn for_loop_now_parses_in_m2() {
+    // for loops are syntactically valid in M2; lowering rejects them
+    let ast = parse("for (;;) {}").unwrap();
+    assert!(matches!(ast.statements[0].kind, opengen_genexpr::StatementKind::For { .. }));
 }

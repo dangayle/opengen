@@ -24,6 +24,15 @@ pub enum Token {
     Ident(String),
     // Keywords
     Param,
+    Require,
+    Return,
+    Break,
+    Continue,
+    If,
+    Else,
+    While,
+    Do,
+    For,
     // Punctuation
     LParen,
     RParen,
@@ -65,10 +74,13 @@ pub enum Token {
     Lte,        // <=
     EqualEqual, // ==
     BangEqual,  // !=
+    // String literal
+    Str(String),
     // End of input
     Eof,
 }
 
+#[derive(Clone)]
 pub struct Lexer {
     input: Vec<char>,
     pos: usize,
@@ -297,6 +309,12 @@ impl Lexer {
             return Ok(Spanned { tok: Token::Percent, loc: start_loc });
         }
 
+        // String literals: "..." (double-quoted, no escape sequences)
+        if ch == '"' {
+            self.advance();
+            return self.read_string_with_loc(start_loc);
+        }
+
         // Single-character punctuation
         self.advance();
         let tok = match ch {
@@ -388,9 +406,41 @@ impl Lexer {
         // Check for keywords
         let tok = match ident.as_str() {
             "Param" => Token::Param,
+            "require" => Token::Require,
+            "return" => Token::Return,
+            "break" => Token::Break,
+            "continue" => Token::Continue,
+            "if" => Token::If,
+            "else" => Token::Else,
+            "while" => Token::While,
+            "do" => Token::Do,
+            "for" => Token::For,
             _ => Token::Ident(ident),
         };
         Ok(Spanned { tok, loc: start_loc })
+    }
+    fn read_string_with_loc(&mut self, start_loc: SourceLoc) -> Result<Spanned, String> {
+        // Opening quote consumed by the caller (next_token); read until closing double-quote
+        let mut value = String::new();
+        loop {
+            match self.current() {
+                Some('"') => {
+                    self.advance();
+                    break;
+                }
+                Some(ch) => {
+                    value.push(ch);
+                    self.advance();
+                }
+                None => {
+                    return Err(format!(
+                        "unterminated string literal starting at line {}, col {}",
+                        start_loc.line, start_loc.col
+                    ));
+                }
+            }
+        }
+        Ok(Spanned { tok: Token::Str(value), loc: start_loc })
     }
 }
 

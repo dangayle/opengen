@@ -1,11 +1,12 @@
 //! .genexpr lexer/parser → AST → lowering to IR
 
-mod ast;
+pub mod ast;
 mod lexer;
 mod parser;
 mod lower;
 
-pub use ast::{Program, Statement, StatementKind, Expr, BinOpKind, SourceLoc};
+pub use ast::{Program, Statement, StatementKind, Expr, BinOpKind, SourceLoc,
+    DeclType, Declarator, UnaryOp};
 pub use lower::{lower, LowerError};
 
 use opengen_ir::Graph;
