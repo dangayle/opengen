@@ -1,7 +1,7 @@
 //! Lower AST to IR Graph
 
 use crate::ast::{*, UnaryOp};
-use opengen_ir::{Graph, Node, NodeKind, Port, StateDecl};
+use opengen_ir::{proc, Graph, Node, NodeKind, Port, StateDecl};
 use opengen_ops::Registry;
 use std::collections::HashMap;
 
@@ -35,6 +35,10 @@ const BUILTIN_CONSTANTS: &[(&str, f64)] = &[
     ("vectorsize", 1.0),
 ];
 
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
 #[derive(Debug)]
 pub struct LowerError {
     pub msg: String,
@@ -51,6 +55,163 @@ impl std::fmt::Display for LowerError {
 }
 
 impl std::error::Error for LowerError {}
+
+// ---------------------------------------------------------------------------
+// Region metadata — collected in a first pass over all statements
+// ---------------------------------------------------------------------------
+
+/// Metadata about identifiers used inside a control-flow region.
+struct RegionMeta {
+    /// All assigned non-output names → local slot index.
+    locals: Vec<String>,
+    local_idx: HashMap<String, u32>,
+    /// Param declarations: (name, default).
+    params: Vec<(String, f64)>,
+    param_idx: HashMap<String, u16>,
+    /// History declarations: (name, init).
+    histories: Vec<(String, f64)>,
+    hist_idx: HashMap<String, u32>,
+    /// Distinct inN references (store the input index).
+    in_refs: Vec<u16>,
+    /// Distinct output indices.
+    outputs: Vec<u16>,
+    /// Stateful op calls inside region: each gets a state_base offset.
+    /// We track the call-expression and later assign state slots.
+    stateful_ops: Vec<StatefulOpInfo>,
+    /// Cumulative state offset (after all History slots + previously allocated stateful ops).
+    next_state_base: u32,
+}
+
+/// Info about a stateful op call inside a region.
+#[derive(Debug, Clone)]
+struct StatefulOpInfo {
+    /// The whole Call expression.
+    expr: Expr,
+    /// Size of state this call needs, from Registry.
+    _state_size: u32,
+    /// Assigned state_base offset into region state.
+    state_base: u32,
+}
+
+impl RegionMeta {
+    fn new() -> Self {
+        Self {
+            locals: Vec::new(),
+            local_idx: HashMap::new(),
+            params: Vec::new(),
+            param_idx: HashMap::new(),
+            histories: Vec::new(),
+            hist_idx: HashMap::new(),
+            in_refs: Vec::new(),
+            outputs: Vec::new(),
+            stateful_ops: Vec::new(),
+            next_state_base: 0,
+        }
+    }
+
+    fn add_local(&mut self, name: &str) {
+        if !self.local_idx.contains_key(name)
+            && !self.param_idx.contains_key(name)
+            && !self.hist_idx.contains_key(name)
+        {
+            let idx = self.locals.len() as u32;
+            self.locals.push(name.to_string());
+            self.local_idx.insert(name.to_string(), idx);
+        }
+    }
+
+    fn add_param(&mut self, name: &str, default: f64) {
+        if !self.param_idx.contains_key(name) {
+            let idx = self.params.len() as u16;
+            self.params.push((name.to_string(), default));
+            self.param_idx.insert(name.to_string(), idx);
+        }
+    }
+
+    fn add_history(&mut self, name: &str, init: f64) -> Result<(), LowerError> {
+        if self.hist_idx.contains_key(name) {
+            return Err(LowerError {
+                msg: format!("duplicate History declaration: {}", name),
+                loc: None,
+            });
+        }
+        let idx = self.histories.len() as u32;
+        self.histories.push((name.to_string(), init));
+        self.hist_idx.insert(name.to_string(), idx);
+        Ok(())
+    }
+
+    fn add_in_ref(&mut self, n: u16) {
+        if !self.in_refs.contains(&n) {
+            self.in_refs.push(n);
+        }
+    }
+
+    fn add_output(&mut self, n: u16) {
+        if !self.outputs.contains(&n) {
+            self.outputs.push(n);
+        }
+    }
+
+    fn register_stateful_op(&mut self, expr: &Expr, state_size: u32) {
+        let state_base = self.next_state_base;
+        self.next_state_base += state_size;
+        self.stateful_ops.push(StatefulOpInfo {
+            expr: expr.clone(),
+            _state_size: state_size,
+            state_base,
+        });
+    }
+
+    /// Total state slots: histories + stateful ops.
+    fn n_state(&self) -> u32 {
+        self.histories.len() as u32 + self.next_state_base
+    }
+
+    /// State init values: history inits first, then zero for stateful ops.
+    fn state_init(&self) -> Vec<f64> {
+        let mut init = Vec::with_capacity(self.n_state() as usize);
+        for (_, v) in &self.histories {
+            init.push(*v);
+        }
+        // stateful ops are zero-initialized
+        init.resize(self.n_state() as usize, 0.0);
+        init
+    }
+
+    /// State index for a History name.
+    fn hist_slot(&self, name: &str) -> Option<u32> {
+        self.hist_idx.get(name).copied()
+    }
+
+    /// Local index for a name.
+    fn local_slot(&self, name: &str) -> Option<u32> {
+        self.local_idx.get(name).copied()
+    }
+
+    /// Return the region input port index for a Param name.
+    fn param_port(&self, name: &str) -> Option<u16> {
+        self.param_idx.get(name).copied()
+    }
+
+    /// Return the region input port index for an inN reference.
+    fn in_port(&self, in_index: u16) -> Option<u16> {
+        let offset = self.params.len() as u16;
+        self.in_refs.iter().position(|&n| n == in_index).map(|p| offset + p as u16)
+    }
+
+    fn n_inputs(&self) -> u16 {
+        self.params.len() as u16 + self.in_refs.len() as u16
+    }
+
+    fn n_outputs(&self) -> u16 {
+        if self.outputs.is_empty() { 0 } else { self.outputs.iter().max().unwrap() + 1 }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lowerer
+// ---------------------------------------------------------------------------
 
 pub struct Lowerer<'a> {
     graph: Graph,
@@ -69,11 +230,739 @@ impl<'a> Lowerer<'a> {
     }
 
     pub fn lower(mut self, program: &Program) -> Result<Graph, LowerError> {
+        // Check if any statement (including inside blocks) has control flow.
+        if has_program_control_flow(&program.statements) {
+            return self.lower_to_region(program);
+        }
+        // M1 path: straight-line lowering (unchanged).
         for stmt in &program.statements {
             self.lower_statement(stmt)?;
         }
         Ok(self.graph)
     }
+
+    // ─────────────────────────────────────────────────────────
+    //  Region lowering path
+    // ─────────────────────────────────────────────────────────
+
+    /// Lower the entire program into one Region node.
+    ///
+    /// Architecture (D6): when the program contains any control-flow statement,
+    /// the ENTIRE program body lowers into ONE Region node. Graph-level nodes
+    /// remain only: Input nodes (for inN), Param nodes (for params), the Region,
+    /// and Output nodes.
+    fn lower_to_region(&mut self, program: &Program) -> Result<Graph, LowerError> {
+        // ---- Pass 1: collect metadata ----
+        let mut meta = RegionMeta::new();
+        for stmt in &program.statements {
+            self.collect_region_meta(stmt, &mut meta)?;
+        }
+
+        // ---- Build graph-level nodes ----
+
+        // Param nodes: create a node for each Param decl, wire to region input.
+        let mut param_ports: Vec<(u16, Port)> = Vec::new(); // (region_port_idx, graph_node_port)
+        for (param_idx, (name, default)) in meta.params.iter().enumerate() {
+            let node_id = self.graph.add_node(Node::param(name, *default));
+            let port = Port { node: node_id, index: 0 };
+            self.bindings.insert(name.clone(), port);
+            self.graph.bind(name.clone(), node_id);
+            param_ports.push((param_idx as u16, port));
+        }
+
+        // Input nodes: create one per distinct inN reference.
+        let mut input_ports: Vec<(u16, Port)> = Vec::new(); // (region_in_port_idx, graph_node_port)
+        let base = meta.params.len() as u16;
+        for (i, &in_idx) in meta.in_refs.iter().enumerate() {
+            let name = format!("in{}", in_idx + 1);
+            let node_id = self.graph.add_node(Node::input(in_idx));
+            let port = Port { node: node_id, index: 0 };
+            self.bindings.insert(name, port);
+            // Input nodes are NOT added to graph.bind() — they aren't user bindings.
+            input_ports.push((base + i as u16, port));
+        }
+
+        // ---- Build ProcRegion ----
+
+        let n_inputs = meta.n_inputs();
+        let n_outputs = meta.n_outputs();
+        let n_locals = meta.locals.len() as u32;
+        let n_state = meta.n_state();
+        let state_init = meta.state_init();
+
+        // Pre-populate input_port_of: Param name → region input port, inN → region input port.
+        let mut input_port_of: HashMap<String, u16> = HashMap::new();
+        for (name, _) in &meta.params {
+            input_port_of.insert(name.clone(), meta.param_port(name).unwrap());
+        }
+        for &in_idx in &meta.in_refs {
+            let name = format!("in{}", in_idx + 1);
+            if let Some(port) = meta.in_port(in_idx) {
+                input_port_of.insert(name, port);
+            }
+        }
+
+        // We also need: stateful_op_info for matching during lowering.
+        // The meta.stateful_ops contains the info.
+
+        // ---- Pass 2: lower body statements to PStmt ----
+        let mut body: Vec<proc::PStmt> = Vec::new();
+        for stmt in &program.statements {
+            let stmts = self.lower_region_stmt(
+                stmt,
+                &meta,
+                &input_port_of,
+            )?;
+            body.extend(stmts);
+        }
+
+        let region = proc::ProcRegion {
+            n_inputs,
+            n_outputs,
+            n_locals,
+            n_state,
+            state_init,
+            body,
+        };
+
+        let region_id = self.graph.add_node(Node::region(region));
+
+        // ---- Wire graph edges ----
+        // Param nodes → region input ports.
+        for (port_idx, param_port) in &param_ports {
+            self.graph.connect(*param_port, Port { node: region_id, index: *port_idx });
+        }
+        // Input nodes → region input ports.
+        for (port_idx, in_port) in &input_ports {
+            self.graph.connect(*in_port, Port { node: region_id, index: *port_idx });
+        }
+        // Region output ports → Output nodes.
+        for &out_idx in &meta.outputs {
+            let out_node = self.graph.add_node(Node::output(out_idx));
+            self.graph.connect(
+                Port { node: region_id, index: out_idx },
+                Port { node: out_node, index: 0 },
+            );
+        }
+
+        Ok(std::mem::take(&mut self.graph))
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  Metadata collection helpers
+    // ─────────────────────────────────────────────────────────
+
+    /// First pass: collect assigned names, params, histories, outputs, stateful ops.
+    fn collect_region_meta(&self, stmt: &Statement, meta: &mut RegionMeta) -> Result<(), LowerError> {
+        let stmt_loc = stmt.loc;
+        self.try_collect_region_meta(stmt, meta)
+            .map_err(|e| LowerError { msg: e.msg, loc: Some(stmt_loc) })
+    }
+
+    fn try_collect_region_meta(&self, stmt: &Statement, meta: &mut RegionMeta) -> Result<(), LowerError> {
+        match &stmt.kind {
+            StatementKind::ParamDecl { name, default } => {
+                meta.add_param(name, *default);
+                Ok(())
+            }
+            StatementKind::Decl { ty: DeclType::Param, items } => {
+                for item in items {
+                    let default = item.args.first().map(|e| match e {
+                        Expr::Number(n) => *n,
+                        _ => 0.0,
+                    }).unwrap_or(0.0);
+                    meta.add_param(&item.name, default);
+                }
+                Ok(())
+            }
+            StatementKind::Decl { ty: DeclType::History, items } => {
+                for item in items {
+                    let init = if let Some(init_expr) = item.args.first() {
+                        Lowerer::const_fold(init_expr).ok_or_else(|| LowerError {
+                            msg: format!(
+                                "History '{}' init must be a constant (literal number)",
+                                item.name
+                            ),
+                            loc: None,
+                        })?
+                    } else {
+                        0.0
+                    };
+                    meta.add_history(&item.name, init)?;
+                }
+                Ok(())
+            }
+            StatementKind::Decl { ty, .. } => {
+                Err(LowerError {
+                    msg: format!("{:?} declarations not yet implemented in regions", ty),
+                    loc: None,
+                })
+            }
+            StatementKind::Assign { name, expr } => {
+                if let Some(output_idx) = parse_output_name(name) {
+                    meta.add_output(output_idx);
+                } else if !meta.param_idx.contains_key(name) && !meta.hist_idx.contains_key(name) {
+                    // If it's a param or history, the write goes to the param/history, not a local.
+                    // History writes are handled in statement lowering via SetState.
+                    // Param writes? Params are read-only in GenExpr. But we still need to register
+                    // the name as "known" so it doesn't get an undefined-identifier error.
+                    // Actually, if the name is already a param, it's not a local.
+                }
+                // For all non-output names, also register as local if not already a Param/History.
+                if parse_output_name(name).is_none() && !meta.param_idx.contains_key(name) && !meta.hist_idx.contains_key(name) {
+                    meta.add_local(name);
+                }
+                // Walk expression for inN refs, param refs, stateful ops, etc.
+                self.collect_meta_from_expr(expr, meta);
+                Ok(())
+            }
+            StatementKind::If { cond, then_branch, else_branch } => {
+                self.collect_meta_from_expr(cond, meta);
+                self.collect_region_meta(then_branch, meta)?;
+                if let Some(else_b) = else_branch {
+                    self.collect_region_meta(else_b, meta)?;
+                }
+                Ok(())
+            }
+            StatementKind::While { cond, body } => {
+                self.collect_meta_from_expr(cond, meta);
+                self.collect_region_meta(body, meta)?;
+                Ok(())
+            }
+            StatementKind::DoWhile { body, cond } => {
+                self.collect_meta_from_expr(cond, meta);
+                self.collect_region_meta(body, meta)?;
+                Ok(())
+            }
+            StatementKind::For { init, cond, step, body } => {
+                if let Some(init_stmt) = init {
+                    self.collect_region_meta(init_stmt, meta)?;
+                }
+                if let Some(cond_expr) = cond {
+                    self.collect_meta_from_expr(cond_expr, meta);
+                }
+                if let Some(step_expr) = step {
+                    // For the step expression, treat it as a potential compound-assignment
+                    // to a local: if step is a BinOp with Ident on left, the target gets a local slot.
+                    if let Expr::BinOp { left, .. } = step_expr {
+                        if let Expr::Ident(name) = left.as_ref() {
+                            if parse_output_name(name).is_none() && !meta.param_idx.contains_key(name) && !meta.hist_idx.contains_key(name) {
+                                meta.add_local(name);
+                            }
+                        }
+                    }
+                    self.collect_meta_from_expr(step_expr, meta);
+                }
+                self.collect_region_meta(body, meta)?;
+                Ok(())
+            }
+            StatementKind::Block(stmts) => {
+                for s in stmts {
+                    self.collect_region_meta(s, meta)?;
+                }
+                Ok(())
+            }
+            StatementKind::Break | StatementKind::Continue => {
+                // No metadata to collect from break/continue.
+                Ok(())
+            }
+            StatementKind::Return(_) => {
+                Err(LowerError { msg: "return not yet implemented (Task 16)".to_string(), loc: None })
+            }
+            StatementKind::MultiAssign { .. } => {
+                Err(LowerError { msg: "multi-assign not yet implemented (Task 16)".to_string(), loc: None })
+            }
+            StatementKind::FuncDecl { .. } => {
+                Err(LowerError { msg: "function declarations not yet implemented (Task 16)".to_string(), loc: None })
+            }
+            StatementKind::Require(_) => {
+                Err(LowerError { msg: "require unsupported in M2".to_string(), loc: None })
+            }
+            StatementKind::ExprStmt(expr) => {
+                self.collect_meta_from_expr(expr, meta);
+                Ok(())
+            }
+        }
+    }
+
+    /// Walk an expression looking for inN/param/history refs, builtin constants,
+    /// samplerate, and stateful op calls.
+    fn collect_meta_from_expr(&self, expr: &Expr, meta: &mut RegionMeta) {
+        match expr {
+            Expr::Number(_) | Expr::Str(_) => {}
+            Expr::Ident(name) => {
+                if let Some(in_idx) = parse_input_name(name) {
+                    meta.add_in_ref(in_idx);
+                }
+                // Param references are discovered via the ident lookup in lowering;
+                // we don't need to pre-collect them here since the param is already
+                // in meta.params. But we check if the name matches a param/history.
+                // Already handled by param/history registration.
+            }
+            Expr::BinOp { left, right, .. } => {
+                self.collect_meta_from_expr(left, meta);
+                self.collect_meta_from_expr(right, meta);
+            }
+            Expr::Unary(_, e) => {
+                self.collect_meta_from_expr(e, meta);
+            }
+            Expr::Call { name, args, .. } => {
+                // Check for stateful ops that need per-call-site state.
+                if let Some(op_def) = self.registry.get(name) {
+                    if op_def.state != StateDecl::None && op_def.deferred_ports.is_empty() && op_def.update.is_none() {
+                        // Kernel-managed stateful op (phasor, cycle, noise) — allocate state.
+                        let state_size = match op_def.state {
+                            StateDecl::Slots(n) => n,
+                            StateDecl::None => 0,
+                        };
+                        if state_size > 0 {
+                            meta.register_stateful_op(expr, state_size);
+                        }
+                    }
+                }
+                for arg in args {
+                    self.collect_meta_from_expr(arg, meta);
+                }
+            }
+            Expr::MemberCall { args, .. } => {
+                for arg in args {
+                    self.collect_meta_from_expr(arg, meta);
+                }
+            }
+            Expr::Ternary { cond, true_expr, false_expr } => {
+                self.collect_meta_from_expr(cond, meta);
+                self.collect_meta_from_expr(true_expr, meta);
+                self.collect_meta_from_expr(false_expr, meta);
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  Region statement lowering
+    // ─────────────────────────────────────────────────────────
+
+    /// Lower a statement (inside a region) to zero or more PStmts.
+    fn lower_region_stmt(
+        &self,
+        stmt: &Statement,
+        meta: &RegionMeta,
+        input_port_of: &HashMap<String, u16>,
+    ) -> Result<Vec<proc::PStmt>, LowerError> {
+        let stmt_loc = stmt.loc;
+        self.try_lower_region_stmt(stmt, meta, input_port_of)
+            .map_err(|e| LowerError { msg: e.msg, loc: Some(stmt_loc) })
+    }
+
+    fn try_lower_region_stmt(
+        &self,
+        stmt: &Statement,
+        meta: &RegionMeta,
+        input_port_of: &HashMap<String, u16>,
+    ) -> Result<Vec<proc::PStmt>, LowerError> {
+        match &stmt.kind {
+            StatementKind::ParamDecl { .. } => {
+                // Params are already registered; inside region they read as In(port).
+                Ok(vec![])
+            }
+            StatementKind::Decl { ty: DeclType::Param, .. } => {
+                Ok(vec![])
+            }
+            StatementKind::Decl { ty: DeclType::History, .. } => {
+                // History decls are already registered in state; no PStmt needed.
+                Ok(vec![])
+            }
+            StatementKind::Decl { .. } => {
+                Err(LowerError {
+                    msg: "declarations not yet supported inside region".to_string(),
+                    loc: None,
+                })
+            }
+            StatementKind::Assign { name, expr } => {
+                if let Some(output_idx) = parse_output_name(name) {
+                    let e = self.lower_region_expr(expr, meta, input_port_of)?;
+                    Ok(vec![proc::PStmt::SetOut { index: output_idx, expr: e }])
+                } else if let Some(state_idx) = meta.hist_slot(name) {
+                    // History write: immediate (D6/genlib codebox semantics).
+                    let e = self.lower_region_expr(expr, meta, input_port_of)?;
+                    Ok(vec![proc::PStmt::SetState { index: state_idx, expr: e }])
+                } else if let Some(local_idx) = meta.local_slot(name) {
+                    let e = self.lower_region_expr(expr, meta, input_port_of)?;
+                    Ok(vec![proc::PStmt::SetLocal { dst: local_idx, expr: e }])
+                } else {
+                    Err(LowerError {
+                        msg: format!("internal: unknown name '{}' in region assign", name),
+                        loc: None,
+                    })
+                }
+            }
+            StatementKind::If { cond, then_branch, else_branch } => {
+                let cond_expr = self.lower_region_expr(cond, meta, input_port_of)?;
+                let then_body = self.lower_region_stmts_for_block(
+                    &[then_branch.as_ref().clone()],
+                    meta,
+                    input_port_of,
+                )?;
+                let else_body = if let Some(else_b) = else_branch {
+                    self.lower_region_stmts_for_block(
+                        &[else_b.as_ref().clone()],
+                        meta,
+                        input_port_of,
+                    )?
+                } else {
+                    vec![]
+                };
+                Ok(vec![proc::PStmt::If {
+                    cond: cond_expr,
+                    then_body,
+                    else_body,
+                }])
+            }
+            StatementKind::While { cond, body } => {
+                let cond_expr = self.lower_region_expr(cond, meta, input_port_of)?;
+                let body_stmts = self.lower_region_stmts_for_block(
+                    &[body.as_ref().clone()],
+                    meta,
+                    input_port_of,
+                )?;
+                Ok(vec![proc::PStmt::While {
+                    cond: cond_expr,
+                    body: body_stmts,
+                }])
+            }
+            StatementKind::DoWhile { body, cond } => {
+                // Desugar: do { body } while (cond); → body; while (cond) { body; }
+                let body_stmts = self.lower_region_stmts_for_block(
+                    &[body.as_ref().clone()],
+                    meta,
+                    input_port_of,
+                )?;
+                let cond_expr = self.lower_region_expr(cond, meta, input_port_of)?;
+                let mut result: Vec<proc::PStmt> = Vec::new();
+                // Execute body once unconditionally
+                result.extend(body_stmts.clone());
+                // Then while (cond) { body }
+                result.push(proc::PStmt::While {
+                    cond: cond_expr,
+                    body: body_stmts,
+                });
+                Ok(result)
+            }
+            StatementKind::For { init, cond, step, body } => {
+                // Desugar: for (init; cond; step) body → init; while (cond) { body; step; }
+                let mut result: Vec<proc::PStmt> = Vec::new();
+
+                // Init: statements to execute before the while
+                if let Some(init_stmt) = init {
+                    let init_stmts = self.lower_region_stmt(init_stmt, meta, input_port_of)?;
+                    result.extend(init_stmts);
+                }
+
+                // Condition (default true)
+                let cond_expr = if let Some(c) = cond {
+                    self.lower_region_expr(c, meta, input_port_of)?
+                } else {
+                    proc::PExpr::Const(1.0)
+                };
+
+                // Body of the while: original body + step
+                let mut while_body = Vec::new();
+                let body_stmts = self.lower_region_stmts_for_block(
+                    &[body.as_ref().clone()],
+                    meta,
+                    input_port_of,
+                )?;
+                while_body.extend(body_stmts);
+
+                // Step: convert step expression to an assignment statement
+                // #continue-in-for
+                // The desugar `for (init; cond; step) body → init; while (cond) { body; step; }`
+                // means `continue` inside the for body SKIPS the step. This diverges from C
+                // where `continue` still executes the step. Documented as a known decision
+                // (the alternative — emitting `do { if(cond){body;continue?}}` — was rejected
+                // as too complex; the dang-tools corpus does not use continue-in-for).
+                if let Some(step_expr) = step {
+                    let step_stmts = self.for_step_as_assign(step_expr, meta, input_port_of)?;
+                    while_body.extend(step_stmts);
+                }
+
+                result.push(proc::PStmt::While {
+                    cond: cond_expr,
+                    body: while_body,
+                });
+
+                Ok(result)
+            }
+            StatementKind::Block(stmts) => {
+                let mut result = Vec::new();
+                for s in stmts {
+                    result.extend(self.lower_region_stmt(s, meta, input_port_of)?);
+                }
+                Ok(result)
+            }
+            StatementKind::Break => {
+                Ok(vec![proc::PStmt::Break])
+            }
+            StatementKind::Continue => {
+                Ok(vec![proc::PStmt::Continue])
+            }
+            StatementKind::Return(_) => {
+                Err(LowerError { msg: "return not yet implemented (Task 16)".to_string(), loc: None })
+            }
+            StatementKind::MultiAssign { .. } => {
+                Err(LowerError { msg: "multi-assign not yet implemented (Task 16)".to_string(), loc: None })
+            }
+            StatementKind::FuncDecl { .. } => {
+                Err(LowerError { msg: "function declarations not yet implemented (Task 16)".to_string(), loc: None })
+            }
+            StatementKind::Require(_) => {
+                Err(LowerError { msg: "require unsupported in M2".to_string(), loc: None })
+            }
+            StatementKind::ExprStmt(expr) => {
+                let e = self.lower_region_expr(expr, meta, input_port_of)?;
+                Ok(vec![proc::PStmt::Eval(e)])
+            }
+        }
+    }
+
+    /// Lower a list of statements as a block (for if/while bodies).
+    fn lower_region_stmts_for_block(
+        &self,
+        stmts: &[Statement],
+        meta: &RegionMeta,
+        input_port_of: &HashMap<String, u16>,
+    ) -> Result<Vec<proc::PStmt>, LowerError> {
+        let mut result = Vec::new();
+        for s in stmts {
+            result.extend(self.lower_region_stmt(s, meta, input_port_of)?);
+        }
+        Ok(result)
+    }
+
+    /// Convert a for-loop step expression into assignment statements.
+    /// The parser desugars compound assignment `i += 1` into `BinOp(Add, Ident("i"), Num(1))`,
+    /// but this is just an expression, not an assignment. We re-interpret it here.
+    fn for_step_as_assign(
+        &self,
+        step: &Expr,
+        meta: &RegionMeta,
+        input_port_of: &HashMap<String, u16>,
+    ) -> Result<Vec<proc::PStmt>, LowerError> {
+        // If step is a BinOp with Ident on the left, produce SetLocal { name }.
+        match step {
+            Expr::BinOp { left, .. } if matches!(left.as_ref(), Expr::Ident(_)) => {
+                if let Expr::Ident(name) = left.as_ref() {
+                    if let Some(local_idx) = meta.local_slot(name) {
+                        let e = self.lower_region_expr(step, meta, input_port_of)?;
+                        return Ok(vec![proc::PStmt::SetLocal { dst: local_idx, expr: e }]);
+                    }
+                }
+                // Fall through: evaluate as expression statement
+                let e = self.lower_region_expr(step, meta, input_port_of)?;
+                Ok(vec![proc::PStmt::Eval(e)])
+            }
+            _ => {
+                let e = self.lower_region_expr(step, meta, input_port_of)?;
+                Ok(vec![proc::PStmt::Eval(e)])
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  Region expression lowering
+    // ─────────────────────────────────────────────────────────
+
+    /// Lower an expression to a PExpr inside a region context.
+    fn lower_region_expr(
+        &self,
+        expr: &Expr,
+        meta: &RegionMeta,
+        input_port_of: &HashMap<String, u16>,
+    ) -> Result<proc::PExpr, LowerError> {
+        match expr {
+            Expr::Number(n) => Ok(proc::PExpr::Const(*n)),
+            Expr::Ident(name) => {
+                // Input references
+                if let Some(in_idx) = parse_input_name(name) {
+                    if let Some(port) = meta.in_port(in_idx) {
+                        return Ok(proc::PExpr::In(port));
+                    }
+                    return Err(LowerError {
+                        msg: format!("input '{}' referenced but not registered in region meta", name),
+                        loc: None,
+                    });
+                }
+
+                // History state reads
+                if let Some(state_idx) = meta.hist_slot(name) {
+                    return Ok(proc::PExpr::State(state_idx));
+                }
+
+                // Param reads → region input port
+                if let Some(port) = meta.param_port(name) {
+                    return Ok(proc::PExpr::In(port));
+                }
+
+                // Local reads
+                if let Some(local_idx) = meta.local_slot(name) {
+                    return Ok(proc::PExpr::Local(local_idx));
+                }
+
+                // Check for builtin constants
+                if let Some(&val) = BUILTIN_CONSTANTS.iter().find(|(k, _)| *k == name).map(|(_, v)| v) {
+                    return Ok(proc::PExpr::Const(val));
+                }
+
+                // Samplerate
+                if name == "samplerate" {
+                    return Ok(proc::PExpr::Call {
+                        op: "samplerate".to_string(),
+                        args: vec![],
+                        state_base: u32::MAX,
+                        data_ref: None,
+                    });
+                }
+
+                Err(LowerError {
+                    msg: format!("undefined identifier: {}", name),
+                    loc: None,
+                })
+            }
+            Expr::BinOp { op, left, right } => {
+                let op_name = op.op_name();
+                let left_expr = self.lower_region_expr(left, meta, input_port_of)?;
+                let right_expr = self.lower_region_expr(right, meta, input_port_of)?;
+                Ok(proc::PExpr::Call {
+                    op: op_name.to_string(),
+                    args: vec![left_expr, right_expr],
+                    state_base: u32::MAX,
+                    data_ref: None,
+                })
+            }
+            Expr::Unary(UnaryOp::Neg, e) => {
+                // -x → 0 - x
+                let expr_port = self.lower_region_expr(e, meta, input_port_of)?;
+                Ok(proc::PExpr::Call {
+                    op: "sub".to_string(),
+                    args: vec![proc::PExpr::Const(0.0), expr_port],
+                    state_base: u32::MAX,
+                    data_ref: None,
+                })
+            }
+            Expr::Unary(UnaryOp::Not, e) => {
+                let expr_port = self.lower_region_expr(e, meta, input_port_of)?;
+                Ok(proc::PExpr::Call {
+                    op: "not".to_string(),
+                    args: vec![expr_port],
+                    state_base: u32::MAX,
+                    data_ref: None,
+                })
+            }
+            Expr::Call { name, args, named_args } => {
+                if !named_args.is_empty() {
+                    return Err(LowerError {
+                        msg: format!("named arguments not yet implemented for '{}'", name),
+                        loc: None,
+                    });
+                }
+
+                // Check for history(…) CALL inside region — this is an error.
+                if name == "history" {
+                    return Err(LowerError {
+                        msg: "history() function call inside region: use History declaration instead"
+                            .to_string(),
+                        loc: None,
+                    });
+                }
+
+                let op_def = self.registry.get(name).ok_or_else(|| LowerError {
+                    msg: format!("unknown function: {}", name),
+                    loc: None,
+                })?;
+
+                if args.len() != op_def.arity as usize {
+                    return Err(LowerError {
+                        msg: format!(
+                            "function '{}' expects {} arguments, got {}",
+                            name,
+                            op_def.arity,
+                            args.len()
+                        ),
+                        loc: None,
+                    });
+                }
+
+                // Check for stateful ops with deferred_ports/update (history/delay)
+                // — they belong to decls, not region call sites.
+                if op_def.update.is_some() || !op_def.deferred_ports.is_empty() {
+                    return Err(LowerError {
+                        msg: format!(
+                            "operator '{}' with deferred updates cannot be called inside a region",
+                            name
+                        ),
+                        loc: None,
+                    });
+                }
+
+                // Determine state_base: look up in meta.stateful_ops
+                let state_base = if op_def.state != StateDecl::None {
+                    // Stateful op call: find the matching entry in meta.stateful_ops.
+                    // We look it up by the entire call expression match.
+                    let found = meta.stateful_ops.iter().find(|info| {
+                        expr_eq(&info.expr, expr)
+                    });
+                    match found {
+                        Some(info) => {
+                            let base = meta.histories.len() as u32 + info.state_base;
+                            base
+                        }
+                        None => u32::MAX,
+                    }
+                } else {
+                    u32::MAX
+                };
+
+                let lower_args: Result<Vec<proc::PExpr>, LowerError> = args
+                    .iter()
+                    .map(|a| self.lower_region_expr(a, meta, input_port_of))
+                    .collect();
+
+                Ok(proc::PExpr::Call {
+                    op: name.clone(),
+                    args: lower_args?,
+                    state_base,
+                    data_ref: None,
+                })
+            }
+            Expr::Ternary { cond, true_expr, false_expr } => {
+                // Ternary → switch op
+                let cond_expr = self.lower_region_expr(cond, meta, input_port_of)?;
+                let true_ex = self.lower_region_expr(true_expr, meta, input_port_of)?;
+                let false_ex = self.lower_region_expr(false_expr, meta, input_port_of)?;
+                Ok(proc::PExpr::Call {
+                    op: "switch".to_string(),
+                    args: vec![cond_expr, true_ex, false_ex],
+                    state_base: u32::MAX,
+                    data_ref: None,
+                })
+            }
+            Expr::MemberCall { .. } => {
+                Err(LowerError {
+                    msg: "member calls not yet implemented".to_string(),
+                    loc: None,
+                })
+            }
+            Expr::Str(_) => {
+                Err(LowerError {
+                    msg: "string literals not supported in runtime expressions".to_string(),
+                    loc: None,
+                })
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  M1 statement lowering (unchanged)
+    // ─────────────────────────────────────────────────────────
 
     fn lower_statement(&mut self, stmt: &Statement) -> Result<(), LowerError> {
         let stmt_loc = stmt.loc;
@@ -176,6 +1065,7 @@ impl<'a> Lowerer<'a> {
                     Ok(())
                 }
             }
+            // Control flow statements — handled by region lowering path.
             StatementKind::If { .. } => {
                 Err(LowerError { msg: "if statements not yet implemented (Task 14–15)".to_string(), loc: None })
             }
@@ -302,7 +1192,7 @@ impl<'a> Lowerer<'a> {
 
             Ok(())
         } else {
-            return Err(LowerError {
+            Err(LowerError {
                 msg: "internal: stateful self-reference on non-call expression".into(),
                 loc: None,
             })
@@ -319,8 +1209,7 @@ impl<'a> Lowerer<'a> {
                 // Check for input nodes (in1, in2, ...)
                 if let Some(input_index) = parse_input_name(name) {
                     // Deduplicate Input nodes: each inN identifier maps to exactly one IR Input node,
-                    // regardless of how many times it's referenced. This keeps the IR minimal and
-                    // ensures NodeId assignment is deterministic (doesn't vary with reference count).
+                    // regardless of how many times it's referenced.
                     if let Some(port) = self.bindings.get(name) {
                         return Ok(*port);
                     }
@@ -449,6 +1338,10 @@ impl<'a> Lowerer<'a> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Free functions
+// ---------------------------------------------------------------------------
+
 /// Parse "outN" to output index (0-based)
 fn parse_output_name(name: &str) -> Option<u16> {
     if name.starts_with("out") {
@@ -472,10 +1365,59 @@ fn is_synthetic_name(name: &str) -> bool {
     name.starts_with("__")
 }
 
+/// Check if a program contains any control-flow statements.
+pub fn has_program_control_flow(stmts: &[Statement]) -> bool {
+    stmts.iter().any(|s| has_stmt_control_flow(s))
+}
+
+fn has_stmt_control_flow(stmt: &Statement) -> bool {
+    match &stmt.kind {
+        StatementKind::If { .. }
+        | StatementKind::While { .. }
+        | StatementKind::DoWhile { .. }
+        | StatementKind::For { .. }
+        | StatementKind::Block(_)
+        | StatementKind::Break
+        | StatementKind::Continue => true,
+        StatementKind::Return(_)
+        | StatementKind::MultiAssign { .. }
+        | StatementKind::FuncDecl { .. } => true, // These also need region path
+        _ => false,
+    }
+}
+
+/// Approximate structural equality for Expr, used to match stateful op call sites
+/// collected during metadata pass with those encountered during statement lowering.
+/// We compare by structural identity (same shape), not by Expr::PartialEq (which
+/// is derived and exact). For call expressions, we compare op name and args recursively.
+fn expr_eq(a: &Expr, b: &Expr) -> bool {
+    match (a, b) {
+        (Expr::Number(na), Expr::Number(nb)) => na == nb,
+        (Expr::Str(sa), Expr::Str(sb)) => sa == sb,
+        (Expr::Ident(sa), Expr::Ident(sb)) => sa == sb,
+        (Expr::BinOp { op: oa, left: la, right: ra }, Expr::BinOp { op: ob, left: lb, right: rb }) => {
+            oa == ob && expr_eq(la, lb) && expr_eq(ra, rb)
+        }
+        (Expr::Unary(ua, ea), Expr::Unary(ub, eb)) => ua == ub && expr_eq(ea, eb),
+        (Expr::Call { name: na, args: aa, .. }, Expr::Call { name: nb, args: ab, .. }) => {
+            na == nb && aa.len() == ab.len() && aa.iter().zip(ab).all(|(a, b)| expr_eq(a, b))
+        }
+        (Expr::Ternary { cond: ca, true_expr: ta, false_expr: fa },
+         Expr::Ternary { cond: cb, true_expr: tb, false_expr: fb }) => {
+            expr_eq(ca, cb) && expr_eq(ta, tb) && expr_eq(fa, fb)
+        }
+        _ => false,
+    }
+}
+
 pub fn lower(program: &Program) -> Result<Graph, LowerError> {
     let registry = Registry::core();
     Lowerer::new(&registry).lower(program)
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
