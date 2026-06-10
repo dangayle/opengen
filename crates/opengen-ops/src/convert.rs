@@ -1,4 +1,7 @@
 //! Type conversion, DSP conversion, and miscellaneous operators.
+//!
+//! Determinism note: Bit-identical output on a given platform/std version. Cross-platform
+//! bit-identity for transcendentals is tracked as an M3 emitter concern.
 
 use crate::registry::OpDef;
 use opengen_ir::StateDecl;
