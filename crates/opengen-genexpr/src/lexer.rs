@@ -64,7 +64,17 @@ impl Lexer {
                 self.line += 1;
                 self.col = 1;
             }
+            Some('\r') => {
+                // Treat CR as a newline; tabs count as one column (no tab-stop expansion)
+                self.line += 1;
+                self.col = 1;
+                // If followed by LF, consume it to treat \r\n as a single line break
+                if self.input.get(self.pos + 1) == Some(&'\n') {
+                    self.pos += 1;
+                }
+            }
             Some(_) => {
+                // Tabs count as one column (no tab-stop expansion)
                 self.col += 1;
             }
             None => {}
@@ -242,5 +252,59 @@ mod tests {
         assert_eq!(lex.next_token().unwrap().tok, Token::Minus);
         assert_eq!(lex.next_token().unwrap().tok, Token::Star);
         assert_eq!(lex.next_token().unwrap().tok, Token::Slash);
+    }
+
+    #[test]
+    fn tokenizes_with_correct_locations() {
+        // Single token on line 1 col 1
+        let mut lex = Lexer::new("a");
+        let t = lex.next_token().unwrap();
+        assert_eq!(t.tok, Token::Ident("a".into()));
+        assert_eq!(t.loc, SourceLoc { line: 1, col: 1 });
+
+        // Second token after space on same line
+        let mut lex = Lexer::new("a b");
+        let t1 = lex.next_token().unwrap();
+        assert_eq!(t1.tok, Token::Ident("a".into()));
+        assert_eq!(t1.loc, SourceLoc { line: 1, col: 1 });
+        let t2 = lex.next_token().unwrap();
+        assert_eq!(t2.tok, Token::Ident("b".into()));
+        assert_eq!(t2.loc, SourceLoc { line: 1, col: 3 });
+
+        // After newline: col resets to 1, line increments
+        let mut lex = Lexer::new("a\nb");
+        let t1 = lex.next_token().unwrap();
+        assert_eq!(t1.tok, Token::Ident("a".into()));
+        assert_eq!(t1.loc, SourceLoc { line: 1, col: 1 });
+        let t2 = lex.next_token().unwrap();
+        assert_eq!(t2.tok, Token::Ident("b".into()));
+        assert_eq!(t2.loc, SourceLoc { line: 2, col: 1 });
+
+        // Tab counted as 1 column (no tab-stop expansion)
+        let mut lex = Lexer::new("a\tb");
+        let t1 = lex.next_token().unwrap();
+        assert_eq!(t1.tok, Token::Ident("a".into()));
+        assert_eq!(t1.loc, SourceLoc { line: 1, col: 1 });
+        let t2 = lex.next_token().unwrap();
+        assert_eq!(t2.tok, Token::Ident("b".into()));
+        assert_eq!(t2.loc, SourceLoc { line: 1, col: 3 });
+
+        // Multi-line input
+        let mut lex = Lexer::new("a\nbc\ndef");
+        let t1 = lex.next_token().unwrap();
+        assert_eq!((t1.tok, t1.loc), (Token::Ident("a".into()), SourceLoc { line: 1, col: 1 }));
+        let t2 = lex.next_token().unwrap();
+        assert_eq!((t2.tok, t2.loc), (Token::Ident("bc".into()), SourceLoc { line: 2, col: 1 }));
+        let t3 = lex.next_token().unwrap();
+        assert_eq!((t3.tok, t3.loc), (Token::Ident("def".into()), SourceLoc { line: 3, col: 1 }));
+
+        // CRLF: b at line 2 col 1
+        let mut lex = Lexer::new("a\r\nb");
+        let t1 = lex.next_token().unwrap();
+        assert_eq!(t1.tok, Token::Ident("a".into()));
+        assert_eq!(t1.loc, SourceLoc { line: 1, col: 1 });
+        let t2 = lex.next_token().unwrap();
+        assert_eq!(t2.tok, Token::Ident("b".into()));
+        assert_eq!(t2.loc, SourceLoc { line: 2, col: 1 });
     }
 }

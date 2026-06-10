@@ -28,6 +28,7 @@ pub enum StatementKind {
     Assign { name: String, expr: Expr },
 }
 
+/// Expression node. Source locations are tracked at [`Statement`] granularity, not per-expression (M2 decision).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(f64),

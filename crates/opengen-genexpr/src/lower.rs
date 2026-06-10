@@ -161,7 +161,10 @@ impl<'a> Lowerer<'a> {
             
             Ok(())
         } else {
-            unreachable!("is_stateful_self_reference should only return true for Call exprs")
+            return Err(LowerError {
+                msg: "internal: stateful self-reference on non-call expression".into(),
+                loc: None,
+            })
         }
     }
 
