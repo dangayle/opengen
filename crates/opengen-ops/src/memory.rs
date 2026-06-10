@@ -141,6 +141,143 @@ pub fn poke(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     0.0
 }
 
+// ─────────────────────────────────────────────────────────────────
+//  Delay operators
+// ─────────────────────────────────────────────────────────────────
+
+/// Write into a delay line's ring buffer (update-phase deferred write).
+///
+/// # Definition
+/// Returns 0.0. The actual write happens in the update phase: the input value is
+/// written into the ring buffer at the current cursor position, then the cursor
+/// advances by 1 (modulo size).
+///
+/// # Vendor
+/// `reference/genlib/gen_dsp/genlib_ops.h`: `struct Delay::write(x)` sets
+/// `writer = reader`, writes `memory[writer] = x`. We adapt this to an
+/// update-phase deferred write: reads happen before writes (compute phase),
+/// writes happen after (update phase), giving minimum 1-sample delay for
+/// read-tap >= 1.
+///
+/// # State layout (synthetic Data node `__delay_<id>`, size N+1)
+/// - Slot 0: cursor (write position, where NEXT write will go)
+/// - Slots 1..N: ring buffer (N samples)
+///
+/// # Ring semantics
+/// Update: `let pos = cursor % N; ring[pos] = input; cursor = (cursor + 1) % N;`
+/// Read: `s(k) = ring[(cursor - k + N) % N]` where cursor is the pre-update value.
+///
+/// ```
+/// use opengen_testkit::render_with_inputs;
+/// // 1-sample echo: write in1, read with tap 1
+/// let out = render_with_inputs(
+///     "Delay d(4); d.write(in1); out1 = d.read(1);",
+///     48000.0,
+///     &[&[1.0, 0.0, 0.0]],
+/// );
+/// assert_eq!(out.ch(0), &[0.0, 1.0, 0.0]);
+/// ```
+pub fn delay_write(_inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
+    0.0
+}
+
+fn delay_write_update(inputs: &[f64], state: &mut [f64], _sr: f64) {
+    let input = inputs[0];
+    let n = state.len() - 1; // slot 0 = cursor, 1..N = ring
+    if n == 0 {
+        return;
+    }
+    let cursor = state[0] as usize;
+    let pos = cursor % n;
+    state[pos + 1] = input;
+    state[0] = ((cursor + 1) % n) as f64;
+}
+
+/// Read from a delay line with linear interpolation.
+///
+/// # Definition
+/// Returns the value from the delay line at tap time `t` (in samples),
+/// clamped to `[1.0, size]`. Linear interpolation:
+/// `i = floor(t)`, `frac = t - i`. Clamp `i` to `[1, size-1]`.
+/// Output = `s(i) + frac * (s(i+1) - s(i))`.
+///
+/// where `s(k)` = sample written `k` samples ago =
+/// `ring[(cursor - k + N) % N]` (cursor is pre-update write position).
+///
+/// # Vendor
+/// `reference/genlib/gen_dsp/genlib_ops.h`: `read_linear`:
+/// `c = clamp(d, reader!=writer, maxdelay)`;
+/// `r = size + reader - c`; reads `memory[r1 & wrap]` and `memory[r2 & wrap]`
+/// with linear_interp.
+///
+/// # M2 Limitation
+/// Only `linear` (default) and `none` interpolation modes are supported.
+/// Cosine, cubic, spline, and spline6 are M3+.
+///
+/// # Divergence
+/// genlib uses power-of-two ring with `& wrap` mask; we use general modulo.
+/// genlib ensures minimum 1-sample delay (no read-before-write); we clamp `t`
+/// to `[1, size]` which achieves the same effect.
+///
+/// ```
+/// use opengen_testkit::render_with_inputs;
+/// // Linear interpolation at half-sample tap
+/// let out = render_with_inputs(
+///     "Delay d(8); d.write(in1); out1 = d.read(1.5);",
+///     48000.0,
+///     &[&[1.0, 0.0, 0.0]],
+/// );
+/// assert_eq!(out.ch(0), &[0.0, 0.5, 0.5]);
+/// ```
+pub fn delay_read(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
+    let tap = inputs[0];
+    let n = state.len() - 1;
+    if n == 0 {
+        return 0.0;
+    }
+    let cursor = state[0] as usize;
+    let tap = tap.max(1.0).min(n as f64);
+    let i = tap.floor() as usize;
+    let frac = tap - tap.floor();
+    let i = i.max(1).min(n.saturating_sub(1));
+    let v0 = ring_read(cursor, i, n, state);
+    let v1 = ring_read(cursor, i + 1, n, state);
+    v0 + frac * (v1 - v0)
+}
+
+/// Read from delay line with nearest-sample (none) interpolation.
+///
+/// # Definition
+/// Returns the value from the delay line at tap time `t` (in samples),
+/// clamped to `[1.0, size]`. Nearest-sample via half-sample offset:
+/// `i = floor(t + 0.5)`, clamp to `[1, size]`. Output = `s(i)`.
+///
+/// # Vendor
+/// `reference/genlib/gen_dsp/genlib_ops.h`: `read_step`:
+/// `clamp(d - 0.5, reader!=writer, maxdelay)`;
+/// `r = size + reader - clamp(...)`; memory `r & wrap`.
+/// We use `floor(t + 0.5)` which is equivalent to genlib's `d - 0.5` floor.
+pub fn delay_read_none(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
+    let tap = inputs[0];
+    let n = state.len() - 1;
+    if n == 0 {
+        return 0.0;
+    }
+    let cursor = state[0] as usize;
+    let tap = tap.max(1.0).min(n as f64);
+    let i = (tap + 0.5).floor() as usize;
+    let i = i.max(1).min(n);
+    ring_read(cursor, i, n, state)
+}
+
+/// Read from the ring buffer at `k` samples ago.
+/// `cursor` is the pre-update write position.
+#[inline]
+fn ring_read(cursor: usize, k: usize, n: usize, state: &[f64]) -> f64 {
+    let idx = (cursor + n - k) % n;
+    state[idx + 1]
+}
+
 pub fn defs() -> Vec<OpDef> {
     vec![
         OpDef {
@@ -160,6 +297,33 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: poke,
+        },
+        OpDef {
+            name: "delay_write",
+            arity: 1,
+            state: StateDecl::None,
+            deferred_ports: &[0],
+            update: Some(delay_write_update),
+            init: None,
+            kernel: delay_write,
+        },
+        OpDef {
+            name: "delay_read",
+            arity: 1,
+            state: StateDecl::None,
+            deferred_ports: &[],
+            update: None,
+            init: None,
+            kernel: delay_read,
+        },
+        OpDef {
+            name: "delay_read_none",
+            arity: 1,
+            state: StateDecl::None,
+            deferred_ports: &[],
+            update: None,
+            init: None,
+            kernel: delay_read_none,
         },
     ]
 }

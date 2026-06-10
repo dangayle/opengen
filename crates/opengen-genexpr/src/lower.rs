@@ -217,6 +217,14 @@ impl RegionMeta {
 // Lowerer
 // ---------------------------------------------------------------------------
 
+/// Info about a declared Delay.
+struct DelayInfo {
+    /// Name of the synthetic Data node ("__delay_<id>")
+    data_name: String,
+    /// Whether d.write() has been used (only one writer allowed)
+    written: bool,
+}
+
 pub struct Lowerer<'a> {
     graph: Graph,
     registry: &'a Registry,
@@ -226,6 +234,10 @@ pub struct Lowerer<'a> {
     /// Ensures per-call-site state allocation even when two calls are
     /// structurally identical (same operator, same arguments).
     region_stateful_idx: Cell<usize>,
+    /// Delay declarations: name -> delay info
+    delay_bindings: HashMap<String, DelayInfo>,
+    /// Counter for unique synthetic Data node names
+    delay_counter: u32,
 }
 
 impl<'a> Lowerer<'a> {
@@ -235,6 +247,8 @@ impl<'a> Lowerer<'a> {
             registry,
             bindings: HashMap::new(),
             region_stateful_idx: Cell::new(0),
+            delay_bindings: HashMap::new(),
+            delay_counter: 0,
         }
     }
 
@@ -373,13 +387,13 @@ impl<'a> Lowerer<'a> {
     // ─────────────────────────────────────────────────────────
 
     /// First pass: collect assigned names, params, histories, outputs, stateful ops.
-    fn collect_region_meta(&self, stmt: &Statement, meta: &mut RegionMeta) -> Result<(), LowerError> {
+    fn collect_region_meta(&mut self, stmt: &Statement, meta: &mut RegionMeta) -> Result<(), LowerError> {
         let stmt_loc = stmt.loc;
         self.try_collect_region_meta(stmt, meta)
             .map_err(|e| LowerError { msg: e.msg, loc: Some(stmt_loc) })
     }
 
-    fn try_collect_region_meta(&self, stmt: &Statement, meta: &mut RegionMeta) -> Result<(), LowerError> {
+    fn try_collect_region_meta(&mut self, stmt: &Statement, meta: &mut RegionMeta) -> Result<(), LowerError> {
         match &stmt.kind {
             StatementKind::ParamDecl { name, default } => {
                 meta.add_param(name, *default);
@@ -432,6 +446,45 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(())
             }
+            StatementKind::Decl { ty: DeclType::Delay, items } => {
+                for item in items {
+                    // In regions, we just allocate the state for the ring buffer.
+                    // Member calls (d.write, d.read) inside regions are rejected with
+                    // a clear error in lower_region_expr.
+                    let size = match item.args.first() {
+                        Some(Expr::Number(n)) => *n as usize,
+                        Some(_) => {
+                            return Err(LowerError {
+                                msg: format!(
+                                    "Delay '{}': size must be a numeric literal",
+                                    item.name
+                                ),
+                                loc: None,
+                            });
+                        }
+                        None => {
+                            return Err(LowerError {
+                                msg: format!(
+                                    "Delay '{}': size is required (got default)",
+                                    item.name
+                                ),
+                                loc: None,
+                            });
+                        }
+                    };
+                    // Push a synthetic Data node to data_decls for state allocation.
+                    // The data_decls loop in lower_to_region creates the Data node.
+                    let data_name = format!("__delay_{}", self.delay_counter);
+                    self.delay_counter += 1;
+                    meta.data_decls.push((data_name.clone(), size + 1));
+                    self.delay_bindings.insert(item.name.clone(), DelayInfo {
+                        data_name,
+                        written: false,
+                    });
+                }
+                Ok(())
+            }
+            #[allow(unreachable_patterns)]
             StatementKind::Decl { ty, .. } => {
                 Err(LowerError {
                     msg: format!("{:?} declarations not yet implemented in regions", ty),
@@ -623,6 +676,11 @@ impl<'a> Lowerer<'a> {
                 // Data/Buffer decls are handled in collect_region_meta; no PStmt needed.
                 Ok(vec![])
             }
+            StatementKind::Decl { ty: DeclType::Delay, .. } => {
+                // Delay decls are handled in collect_region_meta; no PStmt needed.
+                Ok(vec![])
+            }
+            #[allow(unreachable_patterns)]
             StatementKind::Decl { .. } => {
                 Err(LowerError {
                     msg: "declarations not yet supported inside region".to_string(),
@@ -1087,11 +1145,27 @@ impl<'a> Lowerer<'a> {
                     data_ref: None,
                 })
             }
-            Expr::MemberCall { .. } => {
-                Err(LowerError {
-                    msg: "member calls not yet implemented".to_string(),
-                    loc: None,
-                })
+            Expr::MemberCall { object, .. } => {
+                let obj_name = match object.as_ref() {
+                    Expr::Ident(name) => name.clone(),
+                    _ => return Err(LowerError {
+                        msg: "member calls on non-identifier expressions are not supported".to_string(),
+                        loc: None,
+                    }),
+                };
+                if self.delay_bindings.contains_key(&obj_name) {
+                    Err(LowerError {
+                        msg: format!(
+                            "Delay member calls inside control flow are not supported in M2"
+                        ),
+                        loc: None,
+                    })
+                } else {
+                    Err(LowerError {
+                        msg: format!("member calls not supported on '{}'", obj_name),
+                        loc: None,
+                    })
+                }
             }
             Expr::Str(_) => {
                 Err(LowerError {
@@ -1187,6 +1261,43 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(())
             }
+            StatementKind::Decl { ty: DeclType::Delay, items } => {
+                for item in items {
+                    let size = match item.args.first() {
+                        Some(Expr::Number(n)) => *n as usize,
+                        Some(_) => {
+                            return Err(LowerError {
+                                msg: format!(
+                                    "Delay '{}': size must be a numeric literal",
+                                    item.name
+                                ),
+                                loc: None,
+                            });
+                        }
+                        None => {
+                            return Err(LowerError {
+                                msg: format!(
+                                    "Delay '{}': size is required (got default)",
+                                    item.name
+                                ),
+                                loc: None,
+                            });
+                        }
+                    };
+                    // Synthetic Data node: size+1 (slot 0 = cursor, slots 1..size = ring)
+                    let data_name = format!("__delay_{}", self.delay_counter);
+                    self.delay_counter += 1;
+                    let data_node = self.graph.add_node(Node::data(&data_name, size + 1));
+                    self.bindings.insert(item.name.clone(), Port { node: data_node, index: 0 });
+                    self.graph.bind(item.name.clone(), data_node);
+                    self.delay_bindings.insert(item.name.clone(), DelayInfo {
+                        data_name,
+                        written: false,
+                    });
+                }
+                Ok(())
+            }
+            #[allow(unreachable_patterns)]
             StatementKind::Decl { ty, .. } => {
                 Err(LowerError {
                     msg: format!("{:?} declarations not yet implemented", ty),
@@ -1526,8 +1637,104 @@ impl<'a> Lowerer<'a> {
 
                 Ok(Port { node: op_node, index: 0 })
             }
-            Expr::MemberCall { .. } => {
-                Err(LowerError { msg: "member calls not yet implemented".to_string(), loc: None })
+            Expr::MemberCall { object, method, args, named_args } => {
+                // Only delay member calls are supported.
+                let obj_name = match object.as_ref() {
+                    Expr::Ident(name) => name.clone(),
+                    _ => return Err(LowerError {
+                        msg: "member calls on non-identifier expressions are not supported".to_string(),
+                        loc: None,
+                    }),
+                };
+                
+                // Check if this is a delay binding.
+                if let Some(delay_info) = self.delay_bindings.get(&obj_name) {
+                    match method.as_str() {
+                        "write" => {
+                            if delay_info.written {
+                                return Err(LowerError {
+                                    msg: format!("Delay '{}': write() already called (only one writer allowed)", obj_name),
+                                    loc: None,
+                                });
+                            }
+                            if args.len() != 1 {
+                                return Err(LowerError {
+                                    msg: format!("Delay '{}'.write() expects 1 argument, got {}", obj_name, args.len()),
+                                    loc: None,
+                                });
+                            }
+                            if !named_args.is_empty() {
+                                return Err(LowerError {
+                                    msg: format!("Delay '{}'.write() does not accept named arguments", obj_name),
+                                    loc: None,
+                                });
+                            }
+                            let data_ref = delay_info.data_name.clone();
+                            let arg_port = self.lower_expr(&args[0])?;
+                            let op_node = self.graph.add_node(Node::op_with_data(
+                                "delay_write", vec![], StateDecl::None, &data_ref
+                            ));
+                            self.graph.connect(arg_port, Port { node: op_node, index: 0 });
+                            // Mark as written
+                            self.delay_bindings.get_mut(&obj_name).unwrap().written = true;
+                            Ok(Port { node: op_node, index: 0 })
+                        }
+                        "read" => {
+                            if args.len() != 1 {
+                                return Err(LowerError {
+                                    msg: format!("Delay '{}'.read() expects 1 argument (tap time), got {}", obj_name, args.len()),
+                                    loc: None,
+                                });
+                            }
+                            let data_ref = delay_info.data_name.clone();
+                            
+                            // Determine interpolation mode from named args
+                            let interp = named_args.iter().find(|(k, _)| k == "interp");
+                            let op_name = match interp {
+                                None => "delay_read", // default linear
+                                Some((_, Expr::Str(s))) => {
+                                    match s.as_str() {
+                                        "linear" => "delay_read",
+                                        "none" => "delay_read_none",
+                                        other => return Err(LowerError {
+                                            msg: format!(
+                                                "unknown interpolation mode '{}' for delay read; supported: linear, none",
+                                                other
+                                            ),
+                                            loc: None,
+                                        }),
+                                    }
+                                }
+                                Some((_, _)) => return Err(LowerError {
+                                    msg: "interpolation mode must be a string literal".to_string(),
+                                    loc: None,
+                                }),
+                            };
+                            
+                            let arg_port = self.lower_expr(&args[0])?;
+                            let op_node = self.graph.add_node(Node::op_with_data(
+                                op_name, vec![], StateDecl::None, &data_ref
+                            ));
+                            self.graph.connect(arg_port, Port { node: op_node, index: 0 });
+                            Ok(Port { node: op_node, index: 0 })
+                        }
+                        other => Err(LowerError {
+                            msg: format!("unknown method '{}' for Delay '{}'; supported: write, read", other, obj_name),
+                            loc: None,
+                        }),
+                    }
+                } else if self.bindings.contains_key(&obj_name) {
+                    // Known binding but not a delay
+                    Err(LowerError {
+                        msg: format!("member calls not supported on '{}' (only Delay supports member calls)", obj_name),
+                        loc: None,
+                    })
+                } else {
+                    Err(LowerError {
+                        msg: format!("undefined identifier: '{}'", obj_name),
+                        loc: None,
+                    })
+                }
             }
             Expr::Ternary { cond, true_expr, false_expr } => {
                 // Lower to switch(cond, true_expr, false_expr)

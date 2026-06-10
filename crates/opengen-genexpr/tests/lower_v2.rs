@@ -306,10 +306,14 @@ fn buffer_decl_works_as_data_alias() {
 }
 
 #[test]
-fn delay_decl_not_yet_implemented() {
+fn delay_decl_works() {
+    // Unused Delay decl compiles silently (creates synthetic Data node)
+    use opengen_genexpr::lower;
+    use opengen_genexpr::parse;
     let ast = parse("Delay d(100); out1 = 0;").unwrap();
-    let err = lower(&ast).unwrap_err();
-    assert!(err.msg.contains("not yet implemented"), "got: {}", err.msg);
+    let graph = lower(&ast).unwrap();
+    // Should have: synthetic Data node, constant 0, output
+    assert!(graph.nodes().count() >= 3);
 }
 
 // ═══════════════════════════════════════════════════════════════════
