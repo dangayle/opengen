@@ -1,9 +1,39 @@
 //! Lower AST to IR Graph
 
 use crate::ast::{*, UnaryOp};
-use opengen_ir::{Graph, Node, Port, StateDecl};
+use opengen_ir::{Graph, Node, NodeKind, Port, StateDecl};
 use opengen_ops::Registry;
 use std::collections::HashMap;
+
+/// Builtin constants that GenExpr resolves in identifier position (unless shadowed).
+///
+/// # Documented
+/// GenExpr Language Guide, chapter "Builtins & Constants": lists `pi`, `twopi`, `halfpi`,
+/// `invpi`, `e`, `ln2`, `ln10`, `log2e`, `log10e`, `sqrt2`, `sqrt1_2`, `degtorad`, `radtodeg`.
+/// Values match `std::f64::consts` where applicable.
+///
+/// `samplerate` is a separate arity-0 operator (not a constant); `vectorsize` is 1.0
+/// per the per-sample engine divergence (see `# Divergence` on those entries).
+const BUILTIN_CONSTANTS: &[(&str, f64)] = &[
+    ("pi", std::f64::consts::PI),
+    ("twopi", std::f64::consts::TAU),
+    ("halfpi", std::f64::consts::FRAC_PI_2),
+    ("invpi", std::f64::consts::FRAC_1_PI),
+    ("e", std::f64::consts::E),
+    ("ln2", std::f64::consts::LN_2),
+    ("ln10", std::f64::consts::LN_10),
+    ("log2e", std::f64::consts::LOG2_E),
+    ("log10e", std::f64::consts::LOG10_E),
+    ("sqrt2", std::f64::consts::SQRT_2),
+    ("sqrt1_2", std::f64::consts::FRAC_1_SQRT_2),
+    ("degtorad", std::f64::consts::PI / 180.0),
+    ("radtodeg", 180.0 / std::f64::consts::PI),
+    // `vectorsize` → 1.0 (per-sample engine; gen~ returns actual vector size).
+    // # Divergence
+    // opengen uses a per-sample engine (vectorsize is always 1), whereas gen~ can
+    // process signal vectors of configurable size (typically 64 or 128 samples).
+    ("vectorsize", 1.0),
+];
 
 #[derive(Debug)]
 pub struct LowerError {
@@ -62,7 +92,7 @@ impl<'a> Lowerer<'a> {
                 Ok(())
             }
             StatementKind::Decl { ty: DeclType::Param, items } => {
-                // Fold Param declarations into M1-compat lowering
+                // Fold Param declarations into lowerable nodes
                 for item in items {
                     let default = item.args.first().map(|e| match e {
                         Expr::Number(n) => *n,
@@ -75,11 +105,33 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(())
             }
-            StatementKind::Decl { ty: DeclType::History, .. } => {
-                Err(LowerError {
-                    msg: "History declarations not yet implemented in lowering (Task 13)".to_string(),
-                    loc: None,
-                })
+            StatementKind::Decl { ty: DeclType::History, items } => {
+                for item in items {
+                    // Const-fold the init expression to f64
+                    let init = if let Some(init_expr) = item.args.first() {
+                        Self::const_fold(init_expr).ok_or_else(|| LowerError {
+                            msg: format!(
+                                "History '{}' init must be a constant expression, got {:?}",
+                                item.name, init_expr
+                            ),
+                            loc: None,
+                        })?
+                    } else {
+                        0.0
+                    };
+                    // Create a history op node with args=[init] for the init hook to consume
+                    let node_id = self.graph.add_node(Node::op(
+                        "history",
+                        vec![init],
+                        StateDecl::Slots(1),
+                    ));
+                    // Connect port 0 (write port) — initially unconnected, stays at init value
+                    // until an Assign writes to it.
+                    let port = Port { node: node_id, index: 0 };
+                    self.bindings.insert(item.name.clone(), port);
+                    self.graph.bind(item.name.clone(), node_id);
+                }
+                Ok(())
             }
             StatementKind::Decl { ty, .. } => {
                 Err(LowerError {
@@ -88,6 +140,26 @@ impl<'a> Lowerer<'a> {
                 })
             }
             StatementKind::Assign { name, expr } => {
+                // Check if this is a write to an existing history/stateful node
+                // (name already bound to a node with deferred port 0)
+                if let Some(&existing_port) = self.bindings.get(name) {
+                    let node = self.graph.node(existing_port.node);
+                    if let NodeKind::Op { name: op_name, .. } = &node.kind {
+                        if let Some(op_def) = self.registry.get(op_name) {
+                            if op_def.deferred_ports.contains(&0) {
+                                // Write to history/delay: connect RHS to port 0
+                                let rhs_port = self.lower_expr(expr)?;
+                                self.graph.connect(rhs_port, Port {
+                                    node: existing_port.node,
+                                    index: 0,
+                                });
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+
+                // Otherwise, fall through to the normal assign-or-stateful-self-ref logic
                 let is_stateful_self_ref = self.is_stateful_self_reference(name, expr);
                 if is_stateful_self_ref {
                     self.lower_stateful_assign(name, expr)
@@ -137,9 +209,20 @@ impl<'a> Lowerer<'a> {
             StatementKind::Require(_) => {
                 Err(LowerError { msg: "require unsupported in M2".to_string(), loc: None })
             }
-            StatementKind::ExprStmt(_) => {
-                Err(LowerError { msg: "expression statements not yet implemented (Task 13+)".to_string(), loc: None })
+            StatementKind::ExprStmt(expr) => {
+                // Expression statement: lower expr but don't bind (side-effect only, e.g. poke)
+                self.lower_expr(expr)?;
+                Ok(())
             }
+        }
+    }
+
+    /// Try to const-fold an expression to a simple f64 literal.
+    /// Supports number literals only (for now). Returns None if not foldable.
+    fn const_fold(expr: &Expr) -> Option<f64> {
+        match expr {
+            Expr::Number(n) => Some(*n),
+            _ => None,
         }
     }
 
@@ -180,19 +263,19 @@ impl<'a> Lowerer<'a> {
         if let Expr::Call { name: op_name, args, .. } = expr {
             let op_def = self.registry.get(op_name)
                 .ok_or_else(|| LowerError { msg: format!("unknown operator: {}", op_name), loc: None })?;
-            
+
             // Create the op node
             let op_node = self.graph.add_node(Node::op(op_name, vec![], op_def.state));
             let op_port = Port { node: op_node, index: 0 };
-            
+
             // Pre-bind the name
             self.bindings.insert(name.to_string(), op_port);
-            
+
             // Record user-visible binding in graph (exclude outputs and synthetic names)
             if !is_synthetic_name(name) && parse_output_name(name).is_none() {
                 self.graph.bind(name.to_string(), op_node);
             }
-            
+
             // Now lower arguments (which can reference the name)
             if args.len() != op_def.arity as usize {
                 return Err(LowerError {
@@ -203,18 +286,18 @@ impl<'a> Lowerer<'a> {
                     loc: None,
                 });
             }
-            
+
             for (i, arg) in args.iter().enumerate() {
                 let arg_port = self.lower_expr(arg)?;
                 self.graph.connect(arg_port, Port { node: op_node, index: i as u16 });
             }
-            
+
             // Handle output nodes
             if let Some(output_index) = parse_output_name(name) {
                 let out_node = self.graph.add_node(Node::output(output_index));
                 self.graph.connect(op_port, Port { node: out_node, index: 0 });
             }
-            
+
             Ok(())
         } else {
             return Err(LowerError {
@@ -239,31 +322,52 @@ impl<'a> Lowerer<'a> {
                     if let Some(port) = self.bindings.get(name) {
                         return Ok(*port);
                     }
-                    
+
                     // Create the Input node and cache it in bindings for future references
                     let node_id = self.graph.add_node(Node::input(input_index));
                     let port = Port { node: node_id, index: 0 };
                     self.bindings.insert(name.clone(), port);
                     return Ok(port);
                 }
-                
-                // Look up in bindings
-                self.bindings.get(name)
-                    .copied()
-                    .ok_or_else(|| LowerError { msg: format!("undefined identifier: {}", name), loc: None })
+
+                // Look up in bindings (locals/params/declarations shadow builtins)
+                if let Some(port) = self.bindings.get(name) {
+                    return Ok(*port);
+                }
+
+                // Check for builtin constants (including vectorsize)
+                if let Some(&val) = BUILTIN_CONSTANTS.iter().find(|(k, _)| *k == name).map(|(_, v)| v) {
+                    let node_id = self.graph.add_node(Node::constant(val));
+                    return Ok(Port { node: node_id, index: 0 });
+                }
+
+                // Check for samplerate (arity-0 op)
+                if name == "samplerate" {
+                    if let Some(op_def) = self.registry.get("samplerate") {
+                        let node_id = self.graph.add_node(Node::op("samplerate", vec![], op_def.state));
+                        return Ok(Port { node: node_id, index: 0 });
+                    }
+                    return Err(LowerError {
+                        msg: "'samplerate' operator not registered".to_string(),
+                        loc: None,
+                    });
+                }
+
+                // Not found anywhere
+                Err(LowerError { msg: format!("undefined identifier: {}", name), loc: None })
             }
             Expr::BinOp { op, left, right } => {
                 let op_name = op.op_name();
                 let op_def = self.registry.get(op_name)
                     .ok_or_else(|| LowerError { msg: format!("unknown binary operator: {}", op_name), loc: None })?;
-                
+
                 let left_port = self.lower_expr(left)?;
                 let right_port = self.lower_expr(right)?;
-                
+
                 let op_node = self.graph.add_node(Node::op(op_name, vec![], op_def.state));
                 self.graph.connect(left_port, Port { node: op_node, index: 0 });
                 self.graph.connect(right_port, Port { node: op_node, index: 1 });
-                
+
                 Ok(Port { node: op_node, index: 0 })
             }
             Expr::Unary(UnaryOp::Neg, e) => {
@@ -296,7 +400,7 @@ impl<'a> Lowerer<'a> {
                 }
                 let op_def = self.registry.get(name)
                     .ok_or_else(|| LowerError { msg: format!("unknown function: {}", name), loc: None })?;
-                
+
                 if args.len() != op_def.arity as usize {
                     return Err(LowerError {
                         msg: format!(
@@ -306,21 +410,35 @@ impl<'a> Lowerer<'a> {
                         loc: None,
                     });
                 }
-                
+
                 let op_node = self.graph.add_node(Node::op(name, vec![], op_def.state));
-                
+
                 for (i, arg) in args.iter().enumerate() {
                     let arg_port = self.lower_expr(arg)?;
                     self.graph.connect(arg_port, Port { node: op_node, index: i as u16 });
                 }
-                
+
                 Ok(Port { node: op_node, index: 0 })
             }
             Expr::MemberCall { .. } => {
                 Err(LowerError { msg: "member calls not yet implemented".to_string(), loc: None })
             }
-            Expr::Ternary { .. } => {
-                Err(LowerError { msg: "ternary not yet implemented".to_string(), loc: None })
+            Expr::Ternary { cond, true_expr, false_expr } => {
+                // Lower to switch(cond, true_expr, false_expr)
+                let cond_port = self.lower_expr(cond)?;
+                let true_port = self.lower_expr(true_expr)?;
+                let false_port = self.lower_expr(false_expr)?;
+
+                // switch is arity 3
+                let op_def = self.registry.get("switch")
+                    .ok_or_else(|| LowerError { msg: "'switch' operator not available (needed for ternary)".to_string(), loc: None })?;
+
+                let switch_node = self.graph.add_node(Node::op("switch", vec![], op_def.state));
+                self.graph.connect(cond_port, Port { node: switch_node, index: 0 });
+                self.graph.connect(true_port, Port { node: switch_node, index: 1 });
+                self.graph.connect(false_port, Port { node: switch_node, index: 2 });
+
+                Ok(Port { node: switch_node, index: 0 })
             }
             Expr::Str(_) => {
                 Err(LowerError { msg: "string literals not supported in runtime expressions".to_string(), loc: None })
@@ -397,15 +515,15 @@ mod tests {
     #[test]
     fn reuses_input_node_across_references() {
         let graph = parse_and_lower("out1 = in1 + in1;").unwrap();
-        
+
         // Count Input nodes in the graph
         let input_count = graph.nodes()
             .filter(|(_, node)| matches!(node.kind, opengen_ir::NodeKind::Input(_)))
             .count();
-        
+
         // Should have exactly ONE Input node, not two
         assert_eq!(input_count, 1, "Expected 1 Input node, got {}", input_count);
-        
+
         // Total nodes: 1 input + 1 add op + 1 output = 3
         assert_eq!(graph.nodes().count(), 3);
     }
@@ -415,7 +533,7 @@ mod tests {
         // Test subtraction
         let graph = parse_and_lower("out1 = 5.0 - 2.0;").unwrap();
         assert!(graph.nodes().count() > 0);
-        
+
         // Test division
         let graph = parse_and_lower("out1 = 10.0 / 2.0;").unwrap();
         assert!(graph.nodes().count() > 0);
@@ -437,7 +555,7 @@ mod tests {
             "out1 = 1.0 == 1.0;",
             "out1 = 1.0 != 2.0;",
         ];
-        
+
         for src in cases {
             let graph = parse_and_lower(src).unwrap();
             assert!(graph.nodes().count() > 0, "Failed to lower: {}", src);
@@ -456,5 +574,43 @@ mod tests {
         // Self-reference through stateful operator (history) is valid
         let graph = parse_and_lower("h = history(h + 1); out1 = h;").unwrap();
         assert!(graph.nodes().count() > 0);
+    }
+
+    #[test]
+    fn history_decl_with_runtime() {
+        // Full pipeline test: History h(5); h = h + 1; out1 = h;
+        use opengen_testkit::render;
+        let out = render("History h(5); h = h + 1; out1 = h;", 48000.0, 3);
+        assert_eq!(out.ch(0), &[5.0, 6.0, 7.0]);
+    }
+
+    #[test]
+    fn constant_pi_resolves() {
+        use opengen_testkit::render;
+        let out = render("out1 = pi;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::PI);
+    }
+
+    #[test]
+    fn ternary_via_switch() {
+        use opengen_testkit::render;
+        let out = render("out1 = 1 ? 100 : 200;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], 100.0);
+        let out2 = render("out1 = 0 ? 100 : 200;", 48000.0, 1);
+        assert_eq!(out2.ch(0)[0], 200.0);
+    }
+
+    #[test]
+    fn samplerate_via_op() {
+        use opengen_testkit::render;
+        let out = render("out1 = samplerate;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], 48000.0);
+    }
+
+    #[test]
+    fn expression_statement_works() {
+        use opengen_testkit::render;
+        let out = render("1 + 2; out1 = 42;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], 42.0);
     }
 }

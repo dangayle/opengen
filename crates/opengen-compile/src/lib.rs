@@ -178,11 +178,15 @@ fn compile_impl(
                     dependencies.entry(src.node).or_insert_with(Vec::new).push(id);
                 }
             } else if matches!(node.kind, NodeKind::Op { .. }) {
-                // Missing required input for an op
-                return Err(CompileError(format!(
-                    "missing input {} for op node {:?}",
-                    port_idx, id
-                )));
+                // Missing required input for an op.
+                // Only error if the port is NOT deferred (deferred ports may be
+                // unconnected, e.g. an un-written History write port).
+                if !deferred.contains(&port_idx) {
+                    return Err(CompileError(format!(
+                        "missing input {} for op node {:?}",
+                        port_idx, id
+                    )));
+                }
             }
         }
     }
@@ -226,7 +230,9 @@ fn compile_impl(
     
     // Build steps in topo order
     let mut steps = Vec::new();
-    let mut values = vec![0.0; node_count];
+    // Slot index for unconnected deferred ports (always reads 0.0).
+    let zero_slot = node_count;
+    let mut values = vec![0.0; node_count + 1];
     let mut state = vec![0.0; state_offset];
     let mut outputs_map: HashMap<u16, usize> = HashMap::new();
     let mut stateful_updates: Vec<(NodeId, Step)> = Vec::new(); // Defer state updates to end, with NodeId for sorting
@@ -267,6 +273,9 @@ fn compile_impl(
                 for port_idx in 0..op_def.arity {
                     if let Some(src) = g.input_of(Port { node: id, index: port_idx }) {
                         input_slots.push(src.node.0 as usize);
+                    } else if op_def.deferred_ports.contains(&port_idx) {
+                        // Unconnected deferred port: use the zero sentinel slot.
+                        input_slots.push(zero_slot);
                     } else {
                         return Err(CompileError(format!(
                             "missing input {} for operator '{}'",
@@ -287,16 +296,23 @@ fn compile_impl(
                     value_slot,
                 });
                 
-                // If op has an update function, defer it for end-of-sample execution
+                // If op has an update function, defer it for end-of-sample execution.
+                // Skip update if all deferred ports are unconnected (e.g. unwritten History
+                // holds its init value forever — no state mutation needed).
                 if let Some(update) = op_def.update {
-                    stateful_updates.push((id, Step {
-                        kind: StepKind::Update {
-                            update,
-                            inputs: input_slots,
-                            state_range,
-                        },
-                        value_slot, // Not actually written to, but needed for struct
-                    }));
+                    let all_deferred_unconnected = op_def.deferred_ports.iter().all(|&p| {
+                        g.input_of(Port { node: id, index: p }).is_none()
+                    });
+                    if !all_deferred_unconnected {
+                        stateful_updates.push((id, Step {
+                            kind: StepKind::Update {
+                                update,
+                                inputs: input_slots,
+                                state_range,
+                            },
+                            value_slot, // Not actually written to, but needed for struct
+                        }));
+                    }
                 }
             }
         }
