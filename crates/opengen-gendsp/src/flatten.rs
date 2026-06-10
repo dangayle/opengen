@@ -13,8 +13,10 @@
 //!   named `Param` defaults; multi-return destructures `out N`.
 //! - Cycle detection: tracks the include stack of canonicalized file paths.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::build;
 use crate::model::Patcher;
@@ -89,8 +91,11 @@ pub struct ResolveCtx {
     include_stack: Vec<PathBuf>,
     /// Cache of loaded abstraction patchers.
     abstraction_cache: HashMap<PathBuf, Patcher>,
-    /// Next subpatcher index for unique naming across all flattens.
-    next_sub_idx: u32,
+    /// Shared subpatcher index counter unique across all flattens (codebox +
+    /// Phase-8 subpatcher boxes). Both `GendspAbstractionResolver` and
+    /// Phase-8 flattening use clones of this `Rc<Cell<u32>>` to ensure
+    /// ascending prefix indices across all call sites.
+    next_sub_idx: Rc<Cell<u32>>,
     /// Box ID → canonical path for abstraction-loaded boxes.
     /// Populated during pre-processing; consumed in Phase 8 for include_stack
     /// management.
@@ -104,15 +109,23 @@ impl ResolveCtx {
             base_dir,
             include_stack: Vec::new(),
             abstraction_cache: HashMap::new(),
-            next_sub_idx: 0,
+            next_sub_idx: Rc::new(Cell::new(0)),
             abstraction_paths: HashMap::new(),
         }
     }
 
     pub fn alloc_sub_idx(&mut self) -> u32 {
-        let idx = self.next_sub_idx;
-        self.next_sub_idx += 1;
+        let idx = self.next_sub_idx.get();
+        self.next_sub_idx.set(idx + 1);
         idx
+    }
+
+    /// Return a clone of the shared sub-index counter for use by
+    /// `GendspAbstractionResolver`, ensuring codebox abstraction calls
+    /// and Phase-8 subpatcher boxes share the same monotonically
+    /// increasing counter.
+    pub fn shared_sub_idx(&self) -> Rc<Cell<u32>> {
+        self.next_sub_idx.clone()
     }
 }
 
@@ -661,7 +674,7 @@ fn build_graph_from_patcher(
             let resolver = GendspAbstractionResolver {
                 search_paths: resolve_ctx.search_paths.clone(),
                 base_dir: resolve_ctx.base_dir.clone(),
-                next_sub_idx: 0,
+                next_sub_idx: resolve_ctx.shared_sub_idx(),
             };
             opengen_genexpr::lower_embedded_with_resolver(
                 &program, &seeded_inputs, host_graph, registry,
@@ -1014,13 +1027,13 @@ pub fn load_patcher_from_path(path: &Path) -> Result<Patcher, GendspError> {
 struct GendspAbstractionResolver {
     search_paths: Vec<PathBuf>,
     base_dir: Option<PathBuf>,
-    next_sub_idx: u32,
+    next_sub_idx: Rc<Cell<u32>>,
 }
 
 impl GendspAbstractionResolver {
     fn alloc_sub_idx(&mut self) -> u32 {
-        let idx = self.next_sub_idx;
-        self.next_sub_idx += 1;
+        let idx = self.next_sub_idx.get();
+        self.next_sub_idx.set(idx + 1);
         idx
     }
 }
@@ -1470,6 +1483,107 @@ mod tests {
             "data buffer should have sub<N>/ prefix");
         assert!(data_names[1].contains("sub0/") || data_names[1].contains("sub1/"),
             "data buffer should have sub<N>/ prefix");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn codebox_abstraction_and_subpatcher_box_no_prefix_collision() {
+        // Both a codebox-called abstraction AND a Phase-8 subpatcher box
+        // use separate counters for sub<N>/ prefixing. Both create delay
+        // Data nodes with the same synthetic name (__delaybox_dly).
+        // Without shared counters, both get sub0/ → duplicate Data name
+        // → CompileError. With shared counters, one gets sub0/, the other sub1/.
+
+        let dir = std::env::temp_dir().join("opengen_test_codebox_sub_collision");
+        let _ = std::fs::create_dir_all(&dir);
+
+        // Abstraction file with a delay box that creates Data "__delaybox_dly"
+        let abs_content = br#"{
+            "patcher": {
+                "fileversion": 1,
+                "boxes": [
+                    {"box": {"id": "dly", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "text": "delay 4"}},
+                    {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                ],
+                "lines": [
+                    {"patchline": {"source": ["dly", 0], "destination": ["o1", 0]}}
+                ]
+            }
+        }"#;
+        std::fs::write(dir.join("hasdelay.gendsp"), abs_content).unwrap();
+
+        // Host: codebox calling hasdelay + subpatcher box with a delay box
+        let host_content = r#"{
+            "patcher": {
+                "fileversion": 1,
+                "classnamespace": "dsp.gen",
+                "rect": [0, 0, 400, 300],
+                "boxes": [
+                    {"box": {"id": "i1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                    {"box": {"id": "cb", "maxclass": "codebox", "numinlets": 1, "numoutlets": 1,
+                        "code": "out1 = hasdelay(in1);"}},
+                    {"box": {"id": "subb", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1,
+                        "text": "gen @file subber",
+                        "patcher": {
+                            "boxes": [
+                                {"box": {"id": "dly", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "text": "delay 4"}},
+                                {"box": {"id": "so1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                            ],
+                            "lines": [
+                                {"patchline": {"source": ["dly", 0], "destination": ["so1", 0]}}
+                            ]
+                        }
+                    }},
+                    {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                ],
+                "lines": [
+                    {"patchline": {"source": ["i1", 0], "destination": ["cb", 0]}},
+                    {"patchline": {"source": ["cb", 0], "destination": ["o1", 0]}}
+                ]
+            }
+        }"#;
+        std::fs::write(dir.join("host.gendsp"), host_content.as_bytes()).unwrap();
+
+        let path = dir.join("host.gendsp");
+        let opts = LoadOptions { search_paths: vec![dir.clone()] };
+        let result = crate::load_gendsp(&path, &opts);
+
+        // Before the fix, this fails with duplicate data name error
+        // After the fix, it compiles successfully with distinct sub<N>/ prefixes.
+        let graph = result.expect(
+            "codebox abstraction + subpatcher box should compile without duplicate data name collisions"
+        );
+
+        // Verify distinct sub<N>/ data prefixes — without shared counter,
+        // both get sub0/ → collision.
+        let data_names: Vec<&str> = graph.nodes().filter_map(|(_, n)| match &n.kind {
+            opengen_ir::NodeKind::Data { name, .. } => Some(name.as_str()),
+            _ => None,
+        }).collect();
+
+        assert!(
+            data_names.iter().any(|n| n.contains("sub0/")),
+            "should have sub0/ prefix: got {:?}",
+            data_names
+        );
+        assert!(
+            data_names.iter().any(|n| n.contains("sub1/")),
+            "should have sub1/ prefix: got {:?}",
+            data_names
+        );
+
+        // Also verify the graph compiles without duplicate-data errors
+        let compile_result = opengen_compile::compile(
+            &graph,
+            &opengen_ops::Registry::core(),
+            48000.0,
+        );
+        assert!(
+            compile_result.is_ok(),
+            "graph should compile without duplicate data: {:?}",
+            compile_result.err()
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
