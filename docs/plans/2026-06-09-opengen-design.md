@@ -18,6 +18,8 @@ independent of Max/MSP. Goals:
 Built for LLM agent plan/implement/test workflows: single language, single toolchain,
 one-command verification, no compromises.
 
+Testing audio/DSP is a fundamental goal of this project. With Max/MSP gen~, there's no deterministic way for an application to run and test any DSP functionality. The best you can do is write it, hope it compiles, then use your ears. This is fine if that is your workflow, but LLMs work much differently. They can write the code and do _some_ limited validation, but they currently cannot compile outside of the Max/MSP ecosystem, there's no way to step through the code, there's no way to validate that it sounds correct. With this project, we aim to make testing and testability of gen/gendsp/genexpr a first-class citizen.
+
 ## Core Decisions
 
 | Decision | Choice | Rationale |
@@ -27,7 +29,6 @@ one-command verification, no compromises.
 | Fidelity | **Spec-normative, gen~ as evidence** | Each operator gets a mathematical definition (IEEE-754 f64). gen~ conformance renders are cross-checks, not the definition. Divergences from Max documented, not copied. |
 | Execution model | **Compile-to-Rust-closures from day one** (no interpreter) | Build it correctly first. Probes provide debuggability inside the compiled artifact. |
 | Determinism | Bit-identical output everywhere | Spec'd evaluation order, IEEE-754 doubles, no fast-math, seeded PRNG for `noise`. Same patch + seed + inputs = same bits, all platforms, all backends. |
-| Math deps | dimforge **not** in core | Core stays near-zero-dep scalar f64. dimforge/simba approved option for analysis or future SIMD only, on concrete need. |
 
 ## Architecture
 
