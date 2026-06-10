@@ -1,0 +1,16 @@
+{
+  "patcher": {
+    "fileversion": 1,
+    "classnamespace": "dsp.gen",
+    "rect": [0, 0, 400, 300],
+    "boxes": [
+      {"box": {"id": "obj-1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+      {"box": {"id": "obj-2", "maxclass": "codebox", "numinlets": 1, "numoutlets": 1, "code": "x = 0; if (in1 > 0.5) { x = in1 * 2; } else { x = 0 - 1; } out1 = x;"}},
+      {"box": {"id": "obj-3", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+    ],
+    "lines": [
+      {"patchline": {"source": ["obj-1", 0], "destination": ["obj-2", 0]}},
+      {"patchline": {"source": ["obj-2", 0], "destination": ["obj-3", 0]}}
+    ]
+  }
+}

@@ -33,7 +33,7 @@ pub enum BoxKind {
     /// `history [NAME]` — history node, optional binding name
     History(Option<String>),
     /// `delay SIZE [TAPS]` — delay line (TAPS > 1 → clear error, M3)
-    Delay(u32),
+    Delay(u32, u32), // (size, taps)
     /// `data NAME SIZE…` / `buffer NAME…` — data region (D10)
     Data(String),
     /// Subpatcher/abstraction: `gen @file NAME`, `gen @gen NAME`, bare `NAME` (unknown op)
@@ -130,11 +130,12 @@ pub fn classify_box_text(text: &str) -> BoxKind {
     // ── Delay ──────────────────────────────────────────────────────
     if cmd == "delay" && rest.len() >= 1 {
         if let Ok(size) = rest[0].parse::<u32>() {
-            if rest.len() > 1 {
-                // TAPS > 1 → clear error for M3
-                // For now, just use size
-            }
-            return BoxKind::Delay(size);
+            let taps = if rest.len() > 1 {
+                rest[1].parse::<u32>().unwrap_or(1)
+            } else {
+                1
+            };
+            return BoxKind::Delay(size, taps);
         }
     }
 
@@ -335,8 +336,8 @@ mod tests {
 
     #[test]
     fn classify_delay() {
-        assert_eq!(classify_box_text("delay 2000"), BoxKind::Delay(2000));
-        assert_eq!(classify_box_text("delay 44100"), BoxKind::Delay(44100));
+        assert_eq!(classify_box_text("delay 2000"), BoxKind::Delay(2000, 1));
+        assert_eq!(classify_box_text("delay 44100"), BoxKind::Delay(44100, 1));
     }
 
     // ── Data / Buffer ──────────────────────────────────────────────

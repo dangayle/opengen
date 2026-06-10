@@ -13,3 +13,4 @@ opengen-genexpr.workspace = true
 opengen-testkit.workspace = true
 opengen-ops.workspace = true
 opengen-ir.workspace = true
+opengen-compile.workspace = true

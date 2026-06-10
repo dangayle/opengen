@@ -22,7 +22,8 @@
 //! - Expression args (e.g., `* twopi/samplerate`) are parsed and lowered into graph nodes
 //! - Param-name args resolve to the patcher's Param node
 
-use std::collections::HashMap;  
+use std::collections::HashMap;
+use opengen_ir::NodeId;  
 
 use opengen_genexpr::{Expr, parse_expression, lower_embedded};
 use opengen_ir::{Graph, Node, Port, StateDecl};
@@ -52,6 +53,7 @@ pub fn build_graph(patcher: &Patcher, registry: &Registry) -> Result<Graph, Stri
         receive_names: HashMap::new(),
         param_ports: HashMap::new(),
         setparam_nodes: HashMap::new(),
+        delay_writes: HashMap::new(),
     };
 
     // ── Phase 1: Classify boxes and create IR nodes ───────────────
@@ -65,6 +67,9 @@ pub fn build_graph(patcher: &Patcher, registry: &Registry) -> Result<Graph, Stri
 
     // ── Phase 4: Default 0.0 for unfilled inlets ──────────────────
     ctx.fill_defaults()?;
+
+    // ── Phase 4a: Fill delay box defaults ─────────────────────────
+    ctx.fill_delay_defaults()?;
 
     // ── Phase 5: Bus resolution (send/receive) ────────────────────
     ctx.resolve_buses()?;
@@ -91,13 +96,15 @@ struct BuildCtx<'a> {
     /// Box ID → (outlet_idx, port) output ports
     out_ports: HashMap<String, Vec<(u16, Port)>>,
     /// Bus name → list of (send_placeholder_node, inlet_idx)
-    bus_sends: HashMap<String, Vec<(opengen_ir::NodeId, u16)>>,
+    bus_sends: HashMap<String, Vec<(NodeId, u16)>>,
     /// Receive box ID → bus name (for aliasing)
     receive_names: HashMap<String, String>,
     /// Param name → Param node port
     param_ports: HashMap<String, Port>,
     /// Param name → setparam box's placeholder node ID
-    setparam_nodes: HashMap<String, opengen_ir::NodeId>,
+    setparam_nodes: HashMap<String, NodeId>,
+    /// Box ID → delay_write node ID (for special inlet wiring)
+    delay_writes: HashMap<String, NodeId>,
 }
 
 /// Information about a classified box.
@@ -212,11 +219,31 @@ impl<'a> BuildCtx<'a> {
                     self.graph.bind(n.clone(), id);
                 }
             }
-            BoxKind::Delay(_size) => {
-                return Err(format!(
-                    "delay box '{}' not yet supported (size={})",
-                    bx.id, _size
+            BoxKind::Delay(_size, taps) => {
+                if *taps > 1 {
+                    return Err(format!(
+                        "delay box '{}': multi-tap (TAPS={}) not yet supported (M3)",
+                        bx.id, taps
+                    ));
+                }
+                let box_id = bx.id.clone();
+                let data_name = format!("__delaybox_{}", box_id);
+                // Synthetic Data node: size+1 (slot 0 = cursor, 1..N = ring)
+                self.graph.add_node(Node::data(&data_name, (*_size as usize) + 1));
+                // delay_write: deferred write, inlet 0 = signal
+                let write_id = self.graph.add_node(Node::op_with_data(
+                    "delay_write", vec![], StateDecl::None, &data_name,
                 ));
+                // delay_read: inlet 0 = tap time, default linear interp
+                let read_id = self.graph.add_node(Node::op_with_data(
+                    "delay_read", vec![], StateDecl::None, &data_name,
+                ));
+                // Outlet 0 = read's output
+                self.add_box_out_port(&box_id, 0, Port { node: read_id, index: 0 });
+                // Store box_info: node_id = read_id, inlets = 2 (signal, tap)
+                self.insert_box_info(&box_id, kind, read_id, 2);
+                // Track delay_write for inlet 0 remapping
+                self.delay_writes.insert(box_id, write_id);
             }
             BoxKind::Data(_name) => {
                 let id = self.graph.add_node(Node::data(_name, 512));
@@ -308,12 +335,18 @@ impl<'a> BuildCtx<'a> {
             // Find source port
             let src_port = self.get_box_outlet_port(src_id, *src_idx)?;
 
-            // Find destination: the box's node_id + inlet
-            let dst_node = self.get_box_node_id(dst_id)?;
-            let dst_port = Port { node: dst_node, index: *dst_idx };
-
-            // Connect
-            self.graph.connect(src_port, dst_port);
+            // Check for delay box special inlet wiring
+            if let Some(&write_node) = self.delay_writes.get(dst_id) {
+                // Delay box: inlet 0 (signal) → delay_write.in0, inlet 1 (tap) → delay_read.in0
+                let real_node = if *dst_idx == 0 { write_node } else { self.get_box_node_id(dst_id)? };
+                let dst_port = Port { node: real_node, index: 0 };
+                self.graph.connect(src_port, dst_port);
+            } else {
+                // Find destination: the box's node_id + inlet
+                let dst_node = self.get_box_node_id(dst_id)?;
+                let dst_port = Port { node: dst_node, index: *dst_idx };
+                self.graph.connect(src_port, dst_port);
+            }
 
             // Track wired inlet
             if let Some(info) = self.box_map.get_mut(dst_id) {
@@ -364,9 +397,12 @@ impl<'a> BuildCtx<'a> {
 
     /// Phase 4: Fill default 0.0 constants for unwired, unfilled inlets.
     fn fill_defaults(&mut self) -> Result<(), String> {
-        // Collect all box entries with arity > 0 into a separate vec to avoid borrow issues
-        let entries: Vec<(opengen_ir::NodeId, Vec<bool>, Vec<u16>)> = self.box_map.iter()
-            .filter(|(_, info)| info.arity > 0 && !info.wired_inlets.is_empty())
+        // Collect all box entries with arity > 0 into a separate vec to avoid borrow issues.
+        // Skip delay boxes — they're handled separately in _fill_delay_defaults.
+        let entries: Vec<(NodeId, Vec<bool>, Vec<u16>)> = self.box_map.iter()
+            .filter(|(bid, info)| {
+                info.arity > 0 && !info.wired_inlets.is_empty() && !self.delay_writes.contains_key(bid.as_str())
+            })
             .map(|(_, info)| (info.node_id, info.wired_inlets.clone(), info.arg_filled.clone()))
             .collect();
         for (node_id, wired_inlets, arg_filled) in entries {
@@ -381,6 +417,40 @@ impl<'a> BuildCtx<'a> {
                         let const_node = self.graph.add_node(Node::constant(0.0));
                         self.graph.connect(Port { node: const_node, index: 0 }, p);
                     }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Phase 4a: Fill default 0.0 for delay box unwired inlets.
+    ///
+    /// Delay boxes have two inlets (signal, tap) mapped to two different IR nodes
+    /// (delay_write and delay_read). The regular fill_defaults skips delay boxes;
+    /// this method handles their special wiring:
+    /// - Inlet 0 (signal) unwired → 0.0 to delay_write.in0 (silent delay line)
+    /// - Inlet 1 (tap) unwired → 0.0 to delay_read.in0 → clamped to 1.0 by kernel
+    fn fill_delay_defaults(&mut self) -> Result<(), String> {
+        let ids: Vec<String> = self.delay_writes.keys().cloned().collect();
+        for box_id in &ids {
+            let write_node = self.delay_writes[box_id];
+            let read_node = self.get_box_node_id(box_id)?;
+            let info = self.box_map.get(box_id).unwrap();
+
+            // Inlet 0 (signal) → delay_write.in0
+            if !info.wired_inlets[0] {
+                let p = Port { node: write_node, index: 0 };
+                if self.graph.input_of(p).is_none() {
+                    let cnst = self.graph.add_node(Node::constant(0.0));
+                    self.graph.connect(Port { node: cnst, index: 0 }, p);
+                }
+            }
+            // Inlet 1 (tap time) → delay_read.in0
+            if !info.wired_inlets[1] {
+                let p = Port { node: read_node, index: 0 };
+                if self.graph.input_of(p).is_none() {
+                    let cnst = self.graph.add_node(Node::constant(0.0));
+                    self.graph.connect(Port { node: cnst, index: 0 }, p);
                 }
             }
         }
