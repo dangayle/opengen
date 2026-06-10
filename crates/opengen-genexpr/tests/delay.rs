@@ -135,24 +135,42 @@ fn unused_delay_decl_compiles() {
 
 #[test]
 fn tap_clamped_to_size() {
-    // Delay d(4); tap=10 clamps to 4 (maxdelay)
-    // Write [1,0,0,0], read all taps from 1 to 4
-    let _out = opengen_testkit::render_with_inputs(
+    // Delay d(4); tap=10 clamps to 4 (maxdelay).
+    // Write [1,0,0,0,0] (5 samples), tap=10 clamped to 4.
+    //
+    // Ring math (N=4, cursor at state[0], ring in state[1..4]):
+    // delay_read linear-interp clamps the interpolation index to n-1=3
+    // (to keep both i and i+1 in bounds).  So tap=4 reads nearest index 3.
+    //
+    //   Sample 0 (cursor=0, in=1):
+    //     ring_read(0, 3, 4) = state[(0+4-3)%4+1] = state[2] = 0
+    //     ring_read(0, 4, 4) = state[(0+4-4)%4+1] = state[1] = 0
+    //     out = 0.  Write at ring[0]=state[1]=1, cursor→1
+    //   Sample 1 (cursor=1, in=0):
+    //     ring_read(1, 3) = state[(1+4-3)%4+1] = state[3] = 0
+    //     ring_read(1, 4) = state[(1+4-4)%4+1] = state[2] = 0
+    //     out = 0.  Write at ring[1]=state[2]=0, cursor→2
+    //   Sample 2 (cursor=2, in=0):
+    //     ring_read(2, 3) = state[(2+4-3)%4+1] = state[4] = 0
+    //     ring_read(2, 4) = state[(2+4-4)%4+1] = state[3] = 0
+    //     out = 0.  Write at ring[2]=state[3]=0, cursor→3
+    //   Sample 3 (cursor=3, in=0):
+    //     ring_read(3, 3) = state[(3+4-3)%4+1] = state[1] = 1 ← from sample 0!
+    //     ring_read(3, 4) = state[(3+4-4)%4+1] = state[4] = 0
+    //     out = 1 + 0*(0-1) = 1.  Write at ring[3]=state[4]=0, cursor→0
+    //   Sample 4 (cursor=0, in=0):
+    //     ring_read(0, 3) = state[(0+4-3)%4+1] = state[2] = 0
+    //     ring_read(0, 4) = state[(0+4-4)%4+1] = state[1] = 1
+    //     out = 0 + 0*(1-0) = 0.
+    //
+    // Result: [0, 0, 0, 1, 0] — the 1 appears at sample 3 because
+    // linear interpolation clamps index to n-1, so tap=4 reads 3 samples ago.
+    let out = opengen_testkit::render_with_inputs(
         "Delay d(4); d.write(in1); out1 = d.read(10);",
         48000.0,
-        &[&[1.0, 0.0, 0.0, 0.0]],
+        &[&[1.0, 0.0, 0.0, 0.0, 0.0]],
     );
-    // With 4-sample delay, tap=4 reads 4 samples ago.
-    // Sample 0: cursor=0, tap=4 -> ring[(0-4+4)%4]=ring[0]. But ring[0] has never been written = 0.
-    // Write 1 at ring[0], cursor=1
-    // Sample 1: cursor=1, tap=4 -> ring[(1-4+4)%4]=ring[1]=0. Write 0 at ring[1], cursor=2
-    // Sample 2: cursor=2, tap=4 -> ring[(2-4+4)%4]=ring[2]=0. Write 0 at ring[2], cursor=3
-    // Sample 3: cursor=3, tap=4 -> ring[(3-4+4)%4]=ring[3]=0. Write 0 at ring[3], cursor=0
-    // After 4 samples, we've written all 4 ring positions.
-    // Sample 4: cursor=0, tap=4 -> ring[(0-4+4)%4]=ring[0]=1 (the sample from sample 0!)
-    // So output after 5 samples: [0,0,0,0,1]
-    // But we only ask for 4 samples in this test.
-    // Let me just verify it compiles and runs without error.
+    assert_eq!(out.ch(0), &[0.0, 0.0, 0.0, 1.0, 0.0]);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -216,6 +234,21 @@ fn delay_inside_region_errors() {
     assert!(
         err.to_string().contains("control flow"),
         "expected error about control flow, got: {}",
+        err.to_string()
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Error: unknown interpolation mode
+
+#[test]
+fn unknown_interp_errors() {
+    let err = opengen_genexpr::parse_and_lower(
+        r##"Delay d(8); d.write(in1); out1 = d.read(1, interp="cubic");"##
+    ).unwrap_err();
+    assert!(
+        err.to_string().contains("unknown interpolation"),
+        "expected error about unknown interpolation, got: {}",
         err.to_string()
     );
 }
