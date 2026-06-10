@@ -98,6 +98,94 @@ pub fn cycle(inputs: &[f64], state: &mut [f64], sr: f64) -> f64 {
     output
 }
 
+/// Uniform random noise generator using xoshiro256++ PRNG.
+///
+/// # Definition
+/// Outputs uniform random values in [-1, 1) using the xoshiro256++ algorithm.
+/// State: 4 × u64 stored as f64 via to_bits/from_bits (deterministic round-trip).
+/// StateDecl::Slots(4), arity 0.
+///
+/// **Seeding**: State arena is zero-initialized. Since all-zero state produces
+/// degenerate output (all zeros), the kernel lazily initializes on first call:
+/// if all four state slots are zero-bits, seeds via splitmix64 from a fixed
+/// constant seed (0x0123456789ABCDEF).
+///
+/// **Mapping**: xoshiro256++ produces u64 values. We map to uniform [0, 1) via
+/// the standard method: `(x >> 11) as f64 * 2^-53`, then to [-1, 1) via
+/// `2.0 * u - 1.0`.
+///
+/// # Algorithm
+/// xoshiro256++ public domain implementation from https://prng.di.unimi.it/xoshiro256plusplus.c
+///
+/// ```
+/// use opengen_testkit::render;
+///
+/// // Determinism: two renders produce identical output
+/// let out1 = render("out1 = noise();", 48000.0, 64);
+/// let out2 = render("out1 = noise();", 48000.0, 64);
+/// assert_eq!(out1.ch(0), out2.ch(0));
+///
+/// // All values within [-1, 1)
+/// for &val in out1.ch(0) {
+///     assert!(val >= -1.0 && val < 1.0, "Out of range: {}", val);
+/// }
+/// ```
+pub fn noise(_inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
+    // Check if state is uninitialized (all zero bits)
+    if state[0].to_bits() == 0
+        && state[1].to_bits() == 0
+        && state[2].to_bits() == 0
+        && state[3].to_bits() == 0
+    {
+        // Lazy initialization via splitmix64
+        const SEED: u64 = 0x0123456789ABCDEF;
+        let mut sm_state = SEED;
+        for i in 0..4 {
+            sm_state = sm_state.wrapping_add(0x9e3779b97f4a7c15);
+            let mut z = sm_state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+            z = z ^ (z >> 31);
+            state[i] = f64::from_bits(z);
+        }
+    }
+
+    // xoshiro256++ algorithm
+    let s0 = state[0].to_bits();
+    let s1 = state[1].to_bits();
+    let s2 = state[2].to_bits();
+    let s3 = state[3].to_bits();
+
+    // result = rotl(s0 + s3, 23) + s0
+    let result = s0
+        .wrapping_add(s3)
+        .rotate_left(23)
+        .wrapping_add(s0);
+
+    // t = s1 << 17
+    let t = s1 << 17;
+
+    // State update
+    let new_s2 = s2 ^ s0;
+    let new_s3 = s3 ^ s1;
+    let new_s1 = s1 ^ new_s2;
+    let new_s0 = s0 ^ new_s3;
+
+    let final_s2 = new_s2 ^ t;
+    let final_s3 = new_s3.rotate_left(45);
+
+    state[0] = f64::from_bits(new_s0);
+    state[1] = f64::from_bits(new_s1);
+    state[2] = f64::from_bits(final_s2);
+    state[3] = f64::from_bits(final_s3);
+
+    // Map to [0, 1) using standard method: (x >> 11) * 2^-53
+    let uniform_0_1 = (result >> 11) as f64 * (1.0 / (1u64 << 53) as f64);
+
+    // Map to [-1, 1)
+    2.0 * uniform_0_1 - 1.0
+}
+
 pub fn defs() -> Vec<OpDef> {
     vec![
         OpDef {
@@ -113,6 +201,13 @@ pub fn defs() -> Vec<OpDef> {
             state: StateDecl::Slots(1),
             auto_state_update: false, // Self-managed state
             kernel: cycle,
+        },
+        OpDef {
+            name: "noise",
+            arity: 0,
+            state: StateDecl::Slots(4),
+            auto_state_update: false, // Self-managed state (PRNG)
+            kernel: noise,
         },
     ]
 }
@@ -141,5 +236,22 @@ mod tests {
         let out = render("out1 = cycle(12000);", 48000.0, 2);
         let val = out.ch(0)[1];
         assert!((val - 1.0).abs() <= f64::EPSILON, "Expected ~1.0, got {}", val);
+    }
+
+    #[test]
+    fn noise_determinism() {
+        // Two renders with same seed produce identical output
+        let out1 = render("out1 = noise();", 48000.0, 64);
+        let out2 = render("out1 = noise();", 48000.0, 64);
+        assert_eq!(out1.ch(0), out2.ch(0));
+    }
+
+    #[test]
+    fn noise_range() {
+        // All values must be in [-1, 1)
+        let out = render("out1 = noise();", 48000.0, 1000);
+        for &val in out.ch(0) {
+            assert!(val >= -1.0 && val < 1.0, "Out of range: {}", val);
+        }
     }
 }
