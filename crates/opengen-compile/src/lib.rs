@@ -43,6 +43,11 @@ pub struct Patch {
 }
 
 impl Patch {
+    /// Returns the number of output channels.
+    pub fn output_count(&self) -> usize {
+        self.outputs.len()
+    }
+
     /// Process one sample frame. Deterministic order = topo order (ties broken by NodeId).
     pub fn process(&mut self, inputs: &[f64]) -> Vec<f64> {
         // Execute all steps in order

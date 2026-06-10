@@ -10,7 +10,7 @@ use opengen_ir::StateDecl;
 /// # Documented
 /// `reference/gen/refpages/common/gen_common_add.maxref.xml`
 ///
-/// ```ignore
+/// ```
 /// use opengen_testkit::render;
 /// let out = render("out1 = 1.5 + 2.25;", 48000.0, 1);
 /// assert_eq!(out.ch(0)[0], 3.75);
@@ -27,7 +27,7 @@ pub fn add(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 /// # Documented
 /// `reference/gen/refpages/common/gen_common_mul.maxref.xml`
 ///
-/// ```ignore
+/// ```
 /// use opengen_testkit::render;
 /// let out = render("out1 = 2.0 * 0.75;", 48000.0, 1);
 /// assert_eq!(out.ch(0)[0], 1.5);

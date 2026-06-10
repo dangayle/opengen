@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 opengen-genexpr.workspace = true
 opengen-compile.workspace = true
+opengen-ops.workspace = true
