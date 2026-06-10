@@ -29,6 +29,8 @@ pub fn render(src: &str, sr: f64, n: usize) -> Render {
 
 /// Compile `src` and render with per-channel input samples.
 /// `n` = longest input channel. Short channels are zero-padded.
+/// If the graph declares more inputs than provided channels, missing inputs default to 0.0.
+/// Extra provided channels are ignored.
 /// Panics on compile error — tests want loud failures.
 pub fn render_with_inputs(src: &str, sr: f64, inputs: &[&[f64]]) -> Render {
     let n = inputs.iter().map(|c| c.len()).max().unwrap_or(0);
@@ -41,8 +43,10 @@ pub fn render_with_inputs_n(src: &str, sr: f64, inputs: &[&[f64]], n: usize) -> 
     render_graph_with_inputs(&graph, sr, inputs, n)
 }
 
-/// Render an already-lowered Graph with inputs (used by opengen-analysis and the
-/// .gendsp exit tests, which produce Graphs without genexpr source).
+/// Render an already-lowered Graph with inputs.
+/// Use this when you already have a lowered `Graph` (e.g., from a non-genexpr source
+/// like `.gendsp`). For genexpr source strings, use `render_with_inputs` or
+/// `render_with_inputs_n` instead.
 pub fn render_graph_with_inputs(
     graph: &opengen_ir::Graph,
     sr: f64,
@@ -86,5 +90,12 @@ mod tests {
         assert_eq!(out.ch(0), &[1.0]);
         let out = render_with_inputs_n("out1 = in1;", 48_000.0, &[&[1.0]], 3);
         assert_eq!(out.ch(0), &[1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn render_with_inputs_missing_channel_defaults_zero() {
+        // Graph expects in1 + in2, but only in1 provided
+        let out = render_with_inputs("out1 = in1 + in2;", 48_000.0, &[&[5.0]]);
+        assert_eq!(out.ch(0)[0], 5.0); // in2 defaults to 0
     }
 }

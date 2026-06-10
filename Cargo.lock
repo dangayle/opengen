@@ -270,6 +270,7 @@ version = "0.1.0"
 dependencies = [
  "opengen-compile",
  "opengen-genexpr",
+ "opengen-ir",
  "opengen-ops",
 ]
 
