@@ -50,7 +50,8 @@ impl Patch {
         self.outputs.len()
     }
     
-    /// Get recorded probe samples by name
+    /// Get recorded probe samples by name.
+    /// Returns `None` if the probe name was not registered at compile time.
     pub fn probe(&self, name: &str) -> Option<&[f64]> {
         self.probes.get(name).map(|(_, samples)| samples.as_slice())
     }
@@ -92,6 +93,9 @@ pub fn compile(g: &Graph, reg: &Registry, sr: f64) -> Result<Patch, CompileError
     compile_impl(g, reg, sr, &[])
 }
 
+/// Compile a graph with named probes that record interior wire values.
+/// Returns an error if any probe name is not found in the graph's bindings.
+/// Use `Patch::probe(name)` to retrieve recorded samples after processing.
 pub fn compile_with_probes(
     g: &Graph,
     reg: &Registry,
@@ -312,7 +316,7 @@ fn compile_impl(
     
     // Build outputs list in order by output index
     // Validate that output indices are contiguous (no gaps)
-    if let Some(&max_output) = outputs_map.keys().max() {
+    let outputs = if let Some(&max_output) = outputs_map.keys().max() {
         for i in 0..=max_output {
             if !outputs_map.contains_key(&i) {
                 return Err(CompileError(format!("missing output index {}", i)));
@@ -322,11 +326,13 @@ fn compile_impl(
         for (&idx, &slot) in &outputs_map {
             outputs[idx as usize] = slot;
         }
-        Ok(Patch { steps, values, state, outputs, sr, probes: probes.clone() })
+        outputs
     } else {
         // No outputs: empty graph is valid
-        Ok(Patch { steps, values, state, outputs: vec![], sr, probes })
-    }
+        vec![]
+    };
+    
+    Ok(Patch { steps, values, state, outputs, sr, probes })
 }
 
 #[cfg(test)]
