@@ -6,10 +6,18 @@ use opengen_ir::StateDecl;
 ///
 /// # Definition
 /// Returns lo if x < lo, hi if x > hi, otherwise x.
-/// Boundary behavior: inclusive on both ends. IEEE-754 f64.
+/// Implemented as `min(max(x, lo), hi)` — does NOT swap inverted bounds.
+/// Inverted bounds (lo > hi) pin to hi. Boundary behavior: inclusive on both ends. IEEE-754 f64.
 ///
 /// # Documented
 /// `reference/gen/refpages/common/gen_common_clip.maxref.xml`
+///
+/// # Vendor
+/// `reference/genlib/gen_dsp/genlib_ops.h`: clamp = `minimum(maximum(x, minVal), maxVal)`
+///
+/// # Observed
+/// Authored conformance patch `conformance/patches/range_inverted_bounds.genexpr` (Task 25)
+/// cross-checks against real gen~ renders.
 ///
 /// ```
 /// use opengen_testkit::render;
@@ -32,11 +40,20 @@ pub fn clip(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 ///
 /// # Definition
 /// Wraps x into [lo, hi) — high bound is EXCLUSIVE.
+/// Normalizes bounds by swapping if lo > hi. If lo == hi, returns lo.
+/// Guard: if normalized range <= 1e-9, returns lo (numerical stability).
 /// Implements modulo-style wrapping: out = lo + (x - lo) % (hi - lo).
 /// IEEE-754 f64. Works for negative inputs.
 ///
 /// # Documented
 /// `reference/gen/refpages/common/gen_common_wrap.maxref.xml`
+///
+/// # Vendor
+/// `reference/genlib/gen_dsp/genlib_ops.h`: swaps bounds if inverted; range <= 1e-9 guard.
+///
+/// # Observed
+/// Authored conformance patch `conformance/patches/range_inverted_bounds.genexpr` (Task 25)
+/// cross-checks against real gen~ renders.
 ///
 /// ```
 /// use opengen_testkit::render;
@@ -51,12 +68,21 @@ pub fn clip(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 /// ```
 pub fn wrap(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
     let x = inputs[0];
-    let lo = inputs[1];
-    let hi = inputs[2];
+    let lo1 = inputs[1];
+    let hi1 = inputs[2];
+    
+    // Normalize bounds: swap if inverted, return lo if degenerate
+    if lo1 == hi1 {
+        return lo1;
+    }
+    let (lo, hi) = if lo1 > hi1 { (hi1, lo1) } else { (lo1, hi1) };
     let range = hi - lo;
-    if range == 0.0 {
+    
+    // genlib guard: range <= 1e-9 returns lo for numerical stability
+    if range <= 1e-9 {
         return lo;
     }
+    
     let offset = (x - lo) % range;
     // Handle negative modulo: ensure result is always in [lo, hi)
     if offset < 0.0 {
@@ -70,11 +96,19 @@ pub fn wrap(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 ///
 /// # Definition
 /// Triangle-wave reflection: values beyond range fold back.
+/// Normalizes bounds by swapping if lo > hi. If lo == hi, returns lo.
 /// If x exceeds hi, reflects back down; if below lo, reflects back up.
 /// Implements sawtooth-to-triangle conversion. IEEE-754 f64.
 ///
 /// # Documented
 /// `reference/gen/refpages/common/gen_common_fold.maxref.xml`
+///
+/// # Vendor
+/// `reference/genlib/gen_dsp/genlib_ops.h`: swaps bounds if inverted.
+///
+/// # Observed
+/// Authored conformance patch `conformance/patches/range_inverted_bounds.genexpr` (Task 25)
+/// cross-checks against real gen~ renders.
 ///
 /// ```
 /// use opengen_testkit::render;
@@ -85,12 +119,15 @@ pub fn wrap(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 /// ```
 pub fn fold(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
     let x = inputs[0];
-    let lo = inputs[1];
-    let hi = inputs[2];
-    let range = hi - lo;
-    if range == 0.0 {
-        return lo;
+    let lo1 = inputs[1];
+    let hi1 = inputs[2];
+    
+    // Normalize bounds: swap if inverted, return lo if degenerate
+    if lo1 == hi1 {
+        return lo1;
     }
+    let (lo, hi) = if lo1 > hi1 { (hi1, lo1) } else { (lo1, hi1) };
+    let range = hi - lo;
     
     // First wrap to [lo, hi + range)
     let mut v = x - lo;
@@ -174,4 +211,35 @@ pub fn defs() -> Vec<OpDef> {
         OpDef { name: "scale", arity: 5, state: StateDecl::None, auto_state_update: true, kernel: scale },
         OpDef { name: "mix", arity: 3, state: StateDecl::None, auto_state_update: true, kernel: mix },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn clip_does_not_swap_inverted_bounds() {
+        use opengen_testkit::render;
+        // D4 / genlib: clip is literally min(max(x, lo), hi) — inverted bounds pin to hi.
+        assert_eq!(render("out1 = clip(0.5, 1, 0);", 48_000.0, 1).ch(0)[0], 0.0);
+        assert_eq!(render("out1 = clip(-3.0, 1, 0);", 48_000.0, 1).ch(0)[0], 0.0);
+        assert_eq!(render("out1 = clip(0.5, 0.25, 0.25);", 48_000.0, 1).ch(0)[0], 0.25);
+        // Regression: normal order unchanged
+        assert_eq!(render("out1 = clip(0.5, 0, 1);", 48_000.0, 1).ch(0)[0], 0.5);
+    }
+
+    #[test]
+    fn wrap_fold_swap_inverted_bounds() {
+        use opengen_testkit::render;
+        // D4 / genlib: wrap and fold normalize bounds by swapping.
+        assert_eq!(render("out1 = wrap(1.25, 1, 0);", 48_000.0, 1).ch(0)[0], 0.25);
+        assert_eq!(render("out1 = fold(1.25, 1, 0);", 48_000.0, 1).ch(0)[0], 0.75);
+    }
+
+    #[test]
+    fn wrap_fold_degenerate_bounds_return_lo() {
+        use opengen_testkit::render;
+        assert_eq!(render("out1 = wrap(0.5, 0.25, 0.25);", 48_000.0, 1).ch(0)[0], 0.25);
+        assert_eq!(render("out1 = fold(0.5, 0.25, 0.25);", 48_000.0, 1).ch(0)[0], 0.25);
+        // genlib guard: wrap with normalized range <= 1e-9 returns lo
+        assert_eq!(render("out1 = wrap(0.5, 0.0, 0.0000000001);", 48_000.0, 1).ch(0)[0], 0.0);
+    }
 }
