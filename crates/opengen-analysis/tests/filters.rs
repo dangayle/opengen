@@ -30,10 +30,10 @@ fn dcblock_blocks_low_frequencies() {
 }
 
 #[test]
-fn dcblock_high_resolution_shows_deep_attentuation() {
+fn dcblock_high_resolution_shows_deep_attenuation() {
     // With 65536-point FFT (~0.73 Hz/bin), we can resolve sub-1 Hz behavior.
     let h = freq_response("out1 = dcblock(in1);", 48_000.0, 65536);
-    // At 0.1 Hz: better resolved; should show deep attenuation
+    // At 0.5 Hz: deeper resolution shows significant attenuation
     assert!(
         h.db_at(0.5) < -10.0,
         "dcblock at 0.5 Hz (65536 FFT): expected < -10 dB, got {} dB",

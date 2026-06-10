@@ -133,6 +133,13 @@ pub fn delta(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
 ///
 /// The `@init` attribute sets the initial value of `prev` (default 0.0).
 ///
+/// # NaN propagation
+/// If the input value is NaN, the output is NaN (IEEE-754 propagation).
+/// The NaN is checked BEFORE the comparison chain, so it isn't consumed by
+/// the ordered comparisons (`>`, `<`) which return false for NaN operands.
+/// The state (`prev`) is NOT updated on NaN input, matching the precedence
+/// set by `delay_read` (memory.rs:245-248).
+///
 /// # Documented
 /// `reference/gen/refpages/dsp/gen_dsp_change.maxref.xml`
 ///
@@ -144,6 +151,12 @@ pub fn delta(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
 /// ```
 pub fn change(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     let x = inputs[0];
+    // NaN propagation (IEEE-754): NaN input → NaN output.
+    // This must be checked BEFORE the comparison chain to prevent ordered
+    // comparisons (>, <) from consuming the NaN (they return false for NaN).
+    if x.is_nan() {
+        return f64::NAN;
+    }
     let prev = state[0];
     let output = if x > prev {
         1.0
@@ -400,6 +413,16 @@ mod tests {
         assert_eq!(out.ch(0), &[0.0, 1.0, -1.0, 1.0]);
     }
 
+    #[test]
+    fn change_nan_input_propagates_nan() {
+        // NaN input → NaN output (IEEE-754); state unchanged (matching delay_read precedent).
+        let mut state = [42.0];
+        let result = change(&[f64::NAN], &mut state, 48000.0);
+        assert!(result.is_nan(), "change(NaN) should return NaN");
+        // State must not be updated (early return before state[0] = x)
+        assert_eq!(state[0], 42.0, "state should be unchanged after NaN input");
+    }
+
     // ── accum ───────────────────────────────────────────────────
 
     #[test]
@@ -465,6 +488,47 @@ mod tests {
         // init prev=2 → change(1) = -1
         let mut state = [2.0];
         assert_eq!(change(&[1.0], &mut state, 48000.0), -1.0);
+    }
+
+    #[test]
+    fn accum_nan_increment_propagates() {
+        // NaN increment → output = sum + NaN = NaN via IEEE-754.
+        // State stores NaN (normal arithmetic propagation, no special guard needed).
+        let mut state = [5.0];
+        let result = accum(&[f64::NAN, 0.0], &mut state, 48000.0);
+        assert!(result.is_nan(), "accum(NaN) output should be NaN");
+        assert!(state[0].is_nan(), "state should store NaN after NaN increment (IEEE-754 arithmetic)");
+    }
+
+    #[test]
+    fn accum_nan_reset_clears_state() {
+        // NaN reset with incr=0: output = sum + 0 = 5; reset=(NaN!=0)=true → state = 0
+        let mut state = [5.0];
+        let result = accum(&[0.0, f64::NAN], &mut state, 48000.0);
+        assert_eq!(result, 5.0, "accum with NaN reset should produce sum+incr first");
+        assert_eq!(state[0], 0.0, "NaN reset != 0 → true → state reset to 0");
+    }
+
+    // ── Latch NaN tests ────────────────────────────────────────
+
+    #[test]
+    fn latch_nan_ctrl_holds_or_passes() {
+        // With NaN ctrl: IEEE-754 `NaN != 0.0` → true (unordered comparison), so
+        // latch passes through the input and stores it.
+        let mut state = [42.0]; // pre-initialized held value
+        let result = latch(&[99.0, f64::NAN], &mut state, 48000.0);
+        // NaN != 0 = true → pass through input
+        assert_eq!(result, 99.0, "latch(NaN ctrl): NaN != 0 is true → passes through input");
+        assert_eq!(state[0], 99.0, "latch stores passed-through value");
+    }
+
+    #[test]
+    fn latch_nan_input_held_with_zero_ctrl() {
+        // NaN input, ctrl=0 → output held value, state unchanged
+        let mut state = [42.0];
+        let result = latch(&[f64::NAN, 0.0], &mut state, 48000.0);
+        assert_eq!(result, 42.0, "latch(NaN, 0): ctrl=0 → output held value");
+        assert_eq!(state[0], 42.0, "state unchanged when ctrl=0");
     }
 
     #[test]

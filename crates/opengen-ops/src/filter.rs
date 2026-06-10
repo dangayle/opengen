@@ -187,9 +187,10 @@ mod tests {
     #[test]
     fn slide_clamps_sub_one_time_constants() {
         // up/down < 1.0 → clamped to 1.0 → identity
+        // All 3 samples should equal the input (5.0) since rate = 1/1 = 1.0
         let out = render_with_inputs_n("out1 = slide(in1, in2, in3);", 48000.0,
             &[&[5.0; 3], &[0.5; 3], &[0.5; 3]], 3);
-        assert_eq!(out.ch(0)[0], 5.0);
+        assert_eq!(out.ch(0), &[5.0, 5.0, 5.0]);
     }
 
     #[test]
