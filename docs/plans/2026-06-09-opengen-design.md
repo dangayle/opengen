@@ -223,5 +223,10 @@ Trademarks: "Max," "gen~," "RNBO," likely "Gen."
 ## Open Items
 
 - Final project name before any public release.
-- gen~ conformance harness mechanics (Max project + batch-render script) — design in M2.
-- Testing façade API shape for doctests — design at start of M1.
+- gen~ conformance harness mechanics (Max project + batch-render script) — design in M2; settles the phasor wrap-semantics `# Observed` question (see `crates/opengen-ops/src/osc.rs` phasor rustdoc).
+- Testkit gaps found in M1 final review: `render_with_inputs()` for filter tests (currently need manual compile/process loop); `assert_stable!` one-liner (finiteness/denormal/DC/RMS bounds); batch probe retrieval (process_n returning all probes).
+- `Response::phase_at` linear interpolation breaks across ±π wrap (documented M1 limitation).
+- `clip`/`wrap`/`fold` behavior for inverted bounds (hi < lo) unspecified — needs `# Definition` decision in M2.
+- Missing scalar math ops for M2 early: sin, cos, tan, exp, log, atan2.
+- Structured error types with source locations (currently String wrappers).
+- genlib export + Cycling74 gen-plugin-export clone into `reference/` (deferred from Task 2).
