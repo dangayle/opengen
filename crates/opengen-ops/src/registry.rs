@@ -16,6 +16,7 @@ impl Registry {
     pub fn core() -> Self {
         let mut ops = std::collections::HashMap::new();
         for def in crate::math::defs() { ops.insert(def.name, def); }
+        for def in crate::compare::defs() { ops.insert(def.name, def); }
         Registry { ops }
     }
     pub fn get(&self, name: &str) -> Option<&OpDef> { self.ops.get(name) }
