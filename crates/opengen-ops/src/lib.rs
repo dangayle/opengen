@@ -6,4 +6,5 @@ pub mod compare;
 pub mod range;
 pub mod state;
 pub mod osc;
+pub mod trig;
 pub use registry::{Registry, OpDef, Kernel, UpdateFn, InitFn};
