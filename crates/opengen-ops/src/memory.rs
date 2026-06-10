@@ -205,6 +205,11 @@ fn delay_write_update(inputs: &[f64], state: &mut [f64], _sr: f64) {
 /// where `s(k)` = sample written `k` samples ago =
 /// `ring[(cursor - k + N) % N]` (cursor is pre-update write position).
 ///
+/// # NaN propagation
+/// If the tap value is NaN, the output is NaN (IEEE-754 propagation).
+/// The NaN is checked BEFORE the clamp, so it passes through the computation
+/// as `NaN.floor() + NaN * ...` rather than being consumed by `max(1.0)`.
+///
 /// # Vendor
 /// `reference/genlib/gen_dsp/genlib_ops.h`: `read_linear`:
 /// `c = clamp(d, reader!=writer, maxdelay)`;
@@ -221,6 +226,10 @@ fn delay_write_update(inputs: &[f64], state: &mut [f64], _sr: f64) {
 /// genlib ensures minimum 1-sample delay (no read-before-write); we clamp `t`
 /// to `[1, size]` which achieves the same effect.
 ///
+/// # Extension
+/// opengen propagates NaN taps to NaN output; genlib's C `long(NaN)` is
+/// undefined behavior (typically returns 0, masking the NaN).
+///
 /// ```
 /// use opengen_testkit::render_with_inputs;
 /// // Linear interpolation at half-sample tap
@@ -233,6 +242,11 @@ fn delay_write_update(inputs: &[f64], state: &mut [f64], _sr: f64) {
 /// ```
 pub fn delay_read(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     let tap = inputs[0];
+    // NaN propagation (IEEE-754): NaN tap → NaN output.
+    // This must be checked BEFORE the clamp to prevent max(1.0) consuming NaN.
+    if tap.is_nan() {
+        return f64::NAN;
+    }
     let n = state.len() - 1;
     if n == 0 {
         return 0.0;
@@ -252,25 +266,58 @@ pub fn delay_read(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
 ///
 /// # Definition
 /// Returns the value from the delay line at tap time `t` (in samples),
-/// clamped to `[1.0, size]`. Nearest-sample via half-sample offset:
-/// `i = floor(t + 0.5)`, clamp to `[1, size]`. Output = `s(i)`.
+/// clamped to `[1.0, size]`. Nearest-sample via half-sample rounding:
+/// `effective_tap = ceil(t - 0.5)`, clamped to `[1, size]`. Output = `s(effective_tap)`.
+///
+/// The formula `ceil(t - 0.5)` rounds half-integers DOWN (ties-to-negative-infinity):
+/// t=1.0 → ceil(0.5)=1, t=1.5 → ceil(1.0)=1, t=1.51 → ceil(1.01)=2, t=2.0 → ceil(1.5)=2.
+/// This matches genlib's read_step tie-down behavior.
+///
+/// # NaN propagation
+/// If the tap value is NaN, the output is NaN (IEEE-754 propagation), checked
+/// BEFORE the clamp to prevent `max(1.0)` consuming NaN.
 ///
 /// # Vendor
 /// `reference/genlib/gen_dsp/genlib_ops.h`: `read_step`:
-/// `clamp(d - 0.5, reader!=writer, maxdelay)`;
-/// `r = size + reader - clamp(...)`; memory `r & wrap`.
-/// We use `floor(t + 0.5)` which is equivalent to genlib's `d - 0.5` floor.
+/// `const t_sample r = t_sample(size + reader) - clamp(d-t_sample(0.5), t_sample(reader != writer), t_sample(maxdelay));`
+/// `long r1 = long(r);`
+/// `return memory[r1 & wrap];`
+///
+/// Derivation:
+/// ```text
+/// idx = (size + reader - clamp(d-0.5, min, maxdelay)) & wrap
+/// r1 = long(r) = floor(size + reader - clamp)          [long truncates toward zero, = floor for positive]
+///    = size + reader - ceil(clamp)                      [floor(N - x) = N - ceil(x) for integer N]
+/// idx = (size + reader - ceil(clamp(d-0.5, …))) & wrap
+/// ```
+/// The effective delay k satisfies `k = ceil(clamp(d - 0.5, 1, maxdelay))`.
+/// For d ∈ [1.0, maxdelay + 0.5]: k = ceil(d - 0.5).
+/// Since tap is already clamped to [1, n], we compute `k = (tap - 0.5).ceil()`.
+///
+/// # Extension
+/// opengen propagates NaN taps to NaN output; genlib's C `long(NaN)` is
+/// undefined behavior (typically returns 0, masking the NaN).
 pub fn delay_read_none(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     let tap = inputs[0];
+    // NaN propagation (IEEE-754): NaN tap → NaN output.
+    // This must be checked BEFORE the clamp to prevent max(1.0) consuming NaN.
+    if tap.is_nan() {
+        return f64::NAN;
+    }
     let n = state.len() - 1;
     if n == 0 {
         return 0.0;
     }
     let cursor = state[0] as usize;
     let tap = tap.max(1.0).min(n as f64);
-    let i = (tap + 0.5).floor() as usize;
-    let i = i.max(1).min(n);
-    ring_read(cursor, i, n, state)
+    // genlib read_step: k = ceil(clamp(d-0.5, 1, maxdelay))
+    // For d ∈ [1, maxdelay+0.5]: k = ceil(d - 0.5).
+    // For d > maxdelay+0.5: clamp caps at maxdelay, so k = maxdelay.
+    // Since we already clamp tap to [1, n], and n = maxdelay+1, we compute:
+    //   k = ceil(tap - 0.5), clamped to [1, n].
+    let k = (tap - 0.5).ceil() as usize;
+    let k = k.max(1).min(n);
+    ring_read(cursor, k, n, state)
 }
 
 /// Read from the ring buffer at `k` samples ago.

@@ -452,7 +452,19 @@ impl<'a> Lowerer<'a> {
                     // Member calls (d.write, d.read) inside regions are rejected with
                     // a clear error in lower_region_expr.
                     let size = match item.args.first() {
-                        Some(Expr::Number(n)) => *n as usize,
+                        Some(Expr::Number(n)) => {
+                            let s = *n as usize;
+                            if s == 0 {
+                                return Err(LowerError {
+                                    msg: format!(
+                                        "Delay '{}': size must be >= 1 (got 0)",
+                                        item.name
+                                    ),
+                                    loc: None,
+                                });
+                            }
+                            s
+                        }
                         Some(_) => {
                             return Err(LowerError {
                                 msg: format!(
@@ -1264,7 +1276,19 @@ impl<'a> Lowerer<'a> {
             StatementKind::Decl { ty: DeclType::Delay, items } => {
                 for item in items {
                     let size = match item.args.first() {
-                        Some(Expr::Number(n)) => *n as usize,
+                        Some(Expr::Number(n)) => {
+                            let s = *n as usize;
+                            if s == 0 {
+                                return Err(LowerError {
+                                    msg: format!(
+                                        "Delay '{}': size must be >= 1 (got 0)",
+                                        item.name
+                                    ),
+                                    loc: None,
+                                });
+                            }
+                            s
+                        }
                         Some(_) => {
                             return Err(LowerError {
                                 msg: format!(
