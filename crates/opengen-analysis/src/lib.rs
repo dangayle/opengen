@@ -1,6 +1,6 @@
 //! Impulse/frequency response, FFT, golden-WAV comparison, plot helpers
 
-pub use response::{impulse_response, freq_response, Response};
+pub use response::{impulse_response, freq_response, spectrum, Response, Spectrum};
 pub mod wav;
 
 mod response;
