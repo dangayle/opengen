@@ -6,3 +6,5 @@ eula	C74/packages/Gen/docs/refpages	gen/refpages
 eula	C74/docs/userguide/content/gen	gen/userguide
 eula	Examples/gen	gen/examples
 eula	C74/help/msp	max/help-msp
+eula	~/Documents/Max 9/Packages/GeneratingSoundAndOrganizingTime	packages/gsot
+eula	~/Documents/Max 9/Packages/oopsy/source/gen_dsp	genlib/gen_dsp

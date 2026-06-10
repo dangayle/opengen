@@ -13,9 +13,22 @@ echo "extracted: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$DEST_ROOT/EXTRACTED.txt"
 
 while IFS=$'\t' read -r license src dest; do
   [[ "$license" =~ ^#.*$ || -z "$license" ]] && continue
+  
+  # Handle absolute paths (starting with / or ~)
+  if [[ "$src" =~ ^/ ]]; then
+    # Absolute path, use as-is
+    full_src="$src"
+  elif [[ "$src" =~ ^~ ]]; then
+    # Tilde expansion: replace ~ with $HOME
+    full_src="${src/#\~/$HOME}"
+  else
+    # Relative path, join to MAX_RES
+    full_src="$MAX_RES/$src"
+  fi
+  
   echo "[$license] $src -> reference/$dest"
   mkdir -p "$DEST_ROOT/$dest"
-  rsync -a --exclude node_modules "$MAX_RES/$src/" "$DEST_ROOT/$dest/"
+  rsync -a --exclude node_modules "$full_src/" "$DEST_ROOT/$dest/"
   echo "$license	$src	$dest" >> "$DEST_ROOT/EXTRACTED.txt"
 done < "$(dirname "$0")/max-refs.manifest"
 echo "Done. reference/ is gitignored; EULA items are read-only reference."
