@@ -22,6 +22,7 @@ dependencies = [
 name = "opengen-genexpr"
 version = "0.1.0"
 dependencies = [
+ "opengen-compile",
  "opengen-ir",
  "opengen-ops",
 ]
