@@ -56,6 +56,11 @@ impl Patch {
         self.probes.get(name).map(|(_, samples)| samples.as_slice())
     }
 
+    /// Names of all probes registered at compile time.
+    pub fn probe_names(&self) -> Vec<&str> {
+        self.probes.keys().map(|s| s.as_str()).collect()
+    }
+
     /// Process one sample frame. Deterministic order = topo order (ties broken by NodeId).
     pub fn process(&mut self, inputs: &[f64]) -> Vec<f64> {
         // Execute all steps in order

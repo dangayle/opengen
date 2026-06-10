@@ -69,6 +69,29 @@ pub fn render_graph_with_inputs(
     Render { channels }
 }
 
+/// Render `n` samples (no inputs) recording the named probes.
+/// Returns the rendered output plus a map of every probe trace.
+pub fn render_with_probes(
+    src: &str,
+    sr: f64,
+    n: usize,
+    probes: &[&str],
+) -> (Render, std::collections::HashMap<String, Vec<f64>>) {
+    let graph = opengen_genexpr::parse_and_lower(src).expect("parse");
+    let mut patch = opengen_compile::compile_with_probes(
+        &graph, &opengen_ops::Registry::core(), sr, probes).expect("compile");
+    let outs = patch.output_count();
+    let mut channels = vec![Vec::with_capacity(n); outs];
+    for _ in 0..n {
+        let frame = patch.process(&[]);
+        for (c, v) in channels.iter_mut().zip(frame) { c.push(v); }
+    }
+    let map = patch.probe_names().iter()
+        .map(|&name| (name.to_string(), patch.probe(name).unwrap().to_vec()))
+        .collect();
+    (Render { channels }, map)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +120,13 @@ mod tests {
         // Graph expects in1 + in2, but only in1 provided
         let out = render_with_inputs("out1 = in1 + in2;", 48_000.0, &[&[5.0]]);
         assert_eq!(out.ch(0)[0], 5.0); // in2 defaults to 0
+    }
+
+    #[test]
+    fn render_with_probes_returns_all_traces() {
+        let (out, probes) = render_with_probes(
+            "h = history(h + 1); out1 = h;", 48_000.0, 3, &["h"]);
+        assert_eq!(out.ch(0), &[0.0, 1.0, 2.0]);
+        assert_eq!(probes["h"], vec![0.0, 1.0, 2.0]);
     }
 }
