@@ -8,7 +8,7 @@ use opengen_ir::StateDecl;
 /// # Definition
 /// `y[n] = wrap(y[n-1] + freq/sr, 0, 1)`, `y[0] = 0.0`. StateDecl::Slots(1), arity 1.
 ///
-/// The kernel outputs the pre-increment phase value, ensuring y[0] == 0.0 exactly:
+/// The kernel outputs the pre-increment phase value, ensuring `y[0] == 0.0` exactly:
 /// `out = state; state = wrap(state + freq/sr, 0, 1)`.
 ///
 /// # Vendor
@@ -121,7 +121,7 @@ pub fn cycle(inputs: &[f64], state: &mut [f64], sr: f64) -> f64 {
 /// `2.0 * u - 1.0`.
 ///
 /// # Algorithm
-/// xoshiro256++ public domain implementation from https://prng.di.unimi.it/xoshiro256plusplus.c
+/// xoshiro256++ public domain implementation from <https://prng.di.unimi.it/xoshiro256plusplus.c>
 ///
 /// ```
 /// use opengen_testkit::render;

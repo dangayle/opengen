@@ -6,7 +6,7 @@ use opengen_ir::StateDecl;
 /// Single-sample delay. Read returns the PREVIOUS sample's written value.
 ///
 /// # Definition
-/// y[n] = x[n-1]; y[0] = init (default 0.0).
+/// `y[n] = x[n-1]; y[0] = init` (default 0.0).
 ///
 /// # Documented
 /// `reference/gen/refpages/dsp/gen_dsp_history.maxref.xml`

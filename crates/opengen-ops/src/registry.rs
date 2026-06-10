@@ -7,7 +7,7 @@ pub struct OpDef {
     pub name: &'static str,
     pub arity: u16,
     pub state: StateDecl,
-    /// If true, the compile layer emits a StateUpdate step copying inputs[0] → state[0].
+    /// If true, the compile layer emits a StateUpdate step copying `inputs[0] → state[0]`.
     /// If false, the kernel manages its own state internally.
     pub auto_state_update: bool,
     pub kernel: Kernel,
