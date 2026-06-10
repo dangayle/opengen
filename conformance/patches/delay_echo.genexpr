@@ -1,0 +1,16 @@
+// delay_echo.genexpr
+// Impulse at sample 0 fed into a 64-sample delay line with three taps.
+// Tests delay_write + delay_read with linear interpolation.
+// out1 = tap at 1 sample (1-sample delayed impulse)
+// out2 = tap at 4 samples (4-sample delayed impulse)
+// out3 = tap at 16 samples (16-sample delayed impulse)
+//
+// Impulse generated via history counter:
+//   h[n] = h[n-1] + 1, imp[n] = (h[n] == 0) → fires at n=0 only.
+h = history(h + 1);
+imp = eq(h, 0);
+Delay d(64);
+d.write(imp);
+out1 = d.read(1);
+out2 = d.read(4);
+out3 = d.read(16);

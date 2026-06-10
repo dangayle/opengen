@@ -1,0 +1,12 @@
+// sah_latch.genexpr
+// Sample-and-hold and latch driven by history counter.
+// h = {0, 1, 2, 3, ..., 4095}
+//
+// sah: samples h when h crosses 2.5 (trigger at h=3).
+//   output: held=0 until sample 3, then 3 forever.
+//
+// latch: passes h when h is non-zero.
+//   output: h=0→0 (held), h=1→1, h=2→2, ...
+h = history(h + 1);
+out1 = sah(h, h, 2.5);
+out2 = latch(h, h);

@@ -1,0 +1,10 @@
+// triangle_duty.genexpr
+// Triangle wave at 100 Hz with three duty cycles.
+// Tests triangle(phase, duty) with varying symmetry.
+// out1 = 25% duty (quick rise, slow fall)
+// out2 = 50% duty (symmetric triangle)
+// out3 = 75% duty (slow rise, quick fall)
+p = phasor(100);
+out1 = triangle(p, 0.25);
+out2 = triangle(p, 0.5);
+out3 = triangle(p, 0.75);

@@ -1,0 +1,5 @@
+// cycle_440.genexpr
+// Pure sine wave at A440 (standard tuning reference).
+// Tests that cycle() produces correct sine output at musical frequency.
+// Mono output: sin(2π·440·t) sampled at 48 kHz.
+out1 = cycle(440);

@@ -1,0 +1,5 @@
+// phasor_incr_order.genexpr
+// Settles the M1 `# Observed` wrap/increment-order question.
+// Odd frequency 997 Hz avoids bin-aligned coincidences at 48 kHz.
+// Output is mono: sawtooth ramp [0, 1) at 997 Hz.
+out1 = phasor(997);

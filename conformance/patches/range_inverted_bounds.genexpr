@@ -1,0 +1,9 @@
+// range_inverted_bounds.genexpr
+// Tests clip/wrap/fold with inverted bounds (lo > hi).
+// Upgrades M1 Task 5 to `# Observed`.
+// clip(0.5, 1, 0): inverted bounds → pin to hi (0)
+// wrap(1.25, 1, 0): inverted → normalized to wrap(1.25, 0, 1) = 0.25
+// fold(1.25, 1, 0): inverted → normalized to fold(1.25, 0, 1) = 0.75
+out1 = clip(0.5, 1, 0);
+out2 = wrap(1.25, 1, 0);
+out3 = fold(1.25, 1, 0);

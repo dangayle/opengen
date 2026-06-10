@@ -1,0 +1,10 @@
+// history_counter.genexpr
+// Impulse-at-sample-zero via history counter.
+// h[n] = h[n-1] + 1, h[0] = 0 (zero-initialized history).
+// imp = (h == 0) → 1.0 at sample 0 only, 0.0 thereafter.
+// out1 = impulse train (single impulse at origin).
+// out2 = counter value (monotonic integer sequence 0, 1, 2, ...).
+h = history(h + 1);
+imp = eq(h, 0);
+out1 = imp;
+out2 = h;

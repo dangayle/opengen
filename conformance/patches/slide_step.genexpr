@@ -1,0 +1,8 @@
+// slide_step.genexpr
+// Step response of slide (logarithmic smoother).
+// Step from 0 to 1 at sample 1 (sample 0 is 0).
+// Slide time constants: up=4, down=4 samples.
+// out1 = slewed step (asymptotic approach to 1.0).
+h = history(h + 1);
+step = switch(gt(h, 0), 1, 0);
+out1 = slide(step, 4, 4);

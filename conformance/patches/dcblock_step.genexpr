@@ -1,0 +1,7 @@
+// dcblock_step.genexpr
+// Step response of dcblock (one-pole highpass, coefficient 0.9997).
+// Constant input 1.0: first sample passes through, then exponential decay to ~0.
+// out1 = highpassed step (1.0, then decays toward 0).
+//
+// Analytic decay envelope: y[n] = 0.9997^(n-1) for n >= 1, y[0] = 1.0.
+out1 = dcblock(1.0);
