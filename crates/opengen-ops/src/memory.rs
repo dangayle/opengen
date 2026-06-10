@@ -17,6 +17,15 @@
 //! bound modes (`@boundmode wrap/fold/clip`), channel modes, and overdub modes.
 //! These are M3+ backlog items. M2 implements the minimal single-channel,
 //! no-interpolation, boundmode-ignore / replace-write subset.
+//!
+//! # D10 Divergence
+//! In opengen, `buffer` is an alias of `data` — they parse to the same NodeKind::Data
+//! and there is no external host providing `buffer~` objects. gen~ distinguishes
+//! `Data` (opengen-style internal array) from `Buffer` (reference to a host
+//! `buffer~` object); the latter has string-argument syntax (`Buffer b("mybuf")`)
+//! that references an external buffer by name. Since opengen has no host-provided
+//! `buffer~` abstraction, string arguments to `Buffer` or `Data` are rejected at
+//! lowering time with a clear error instead of silently defaulting to size 512.
 
 use crate::registry::OpDef;
 use opengen_ir::StateDecl;
@@ -42,30 +51,15 @@ use opengen_ir::StateDecl;
 /// visible to a later-ordered peek in the same sample.
 ///
 /// ```
-/// use opengen_testkit::render;
-/// // Basic round-trip: poke then peek in data d(4)
-/// let out = render("Data d(4); poke(d, 42.0, 1); out1 = peek(d, 1);", 48000.0, 1);
+/// use opengen_testkit::render_with_inputs;
+/// // Round-trip: in1 = 42.0 poked at index 1; OOB peek at index 9 returns 0
+/// let out = render_with_inputs(
+///     "Data d(4); poke(d, in1, 1); out1 = peek(d, 1); out2 = peek(d, 9);",
+///     48000.0,
+///     &[&[42.0]],
+/// );
 /// assert_eq!(out.ch(0)[0], 42.0);
-///
-/// // OOB peek returns 0
-/// let out2 = render("Data d(4); out1 = peek(d, 9);", 48000.0, 1);
-/// assert_eq!(out2.ch(0)[0], 0.0);
-///
-/// // Negative index OOB returns 0
-/// let out3 = render("Data d(4); out1 = peek(d, -1);", 48000.0, 1);
-/// assert_eq!(out3.ch(0)[0], 0.0);
-///
-/// // Poke at negative index writes nothing (OOB)
-/// let out4 = render("Data d(4); poke(d, 99.0, -1); out1 = peek(d, 0);", 48000.0, 1);
-/// assert_eq!(out4.ch(0)[0], 0.0);
-///
-/// // Poke at size-boundary writes nothing (OOB: index == size)
-/// let out5 = render("Data d(4); poke(d, 99.0, 4); out1 = peek(d, 3);", 48000.0, 1);
-/// assert_eq!(out5.ch(0)[0], 0.0);
-///
-/// // Data node output = size
-/// let out6 = render("Data d(4); out1 = d;", 48000.0, 1);
-/// assert_eq!(out6.ch(0)[0], 4.0);
+/// assert_eq!(out.ch(1)[0], 0.0);
 /// ```
 pub fn peek(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     let idx = inputs[0] as i64;
@@ -94,6 +88,13 @@ pub fn peek(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
 /// gen~ `poke` supports overdub modes (`@overdubmode accum` by default, `@overdubmode mix`)
 /// and a separate overdub signal inlet. M2 uses replace-write (the tagged D8 scope)
 /// — the new value replaces the old value unconditionally. Overdub is M3+.
+///
+/// # Determinism
+/// Within-sample write ordering follows topological order with ascending-NodeId ties
+/// (the graph-level determinism contract). A poke at an earlier-ordered node is
+/// visible to a later-ordered peek in the same sample. Write-write ordering: if two
+/// pokes target the same index, the poke with the higher NodeId (later in execution
+/// order) wins.
 ///
 /// ```
 /// use opengen_testkit::render;

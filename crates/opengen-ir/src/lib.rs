@@ -39,6 +39,12 @@ impl Node {
     pub fn op_with_data(name: &str, args: Vec<f64>, state: StateDecl, data_ref: &str) -> Self {
         Node { kind: NodeKind::Op { name: name.into(), args, state, data_ref: Some(data_ref.into()) } }
     }
+    /// Declare a named data buffer (array) with a given number of slots.
+    ///
+    /// # Definition
+    /// Constructor arguments (per `reference/gen/refpages/dsp/gen_dsp_data.maxref.xml`):
+    /// `Data name(size)` — first arg is the name, second is the size (number of slots).
+    /// E.g. `Data d(4)` declares a data buffer named `"d"` with 4 slots.
     pub fn data(name: &str, size: usize) -> Self {
         Node { kind: NodeKind::Data { name: name.into(), size } }
     }

@@ -414,10 +414,20 @@ impl<'a> Lowerer<'a> {
             }
             StatementKind::Decl { ty: DeclType::Data | DeclType::Buffer, items } => {
                 for item in items {
-                    let size = item.args.first().map(|e| match e {
-                        Expr::Number(n) => *n as usize,
-                        _ => 512,
-                    }).unwrap_or(512);
+                    let size = match item.args.first() {
+                        Some(Expr::Number(n)) => *n as usize,
+                        Some(_) => {
+                            return Err(LowerError {
+                                msg: format!(
+                                    "Buffer '{}': external buffer~ references are unsupported in M2 \
+                                     (buffer is a data alias); declare with a numeric size",
+                                    item.name
+                                ),
+                                loc: None,
+                            });
+                        }
+                        None => 512,
+                    };
                     meta.data_decls.push((item.name.clone(), size));
                 }
                 Ok(())
@@ -1153,10 +1163,20 @@ impl<'a> Lowerer<'a> {
             }
             StatementKind::Decl { ty: DeclType::Data | DeclType::Buffer, items } => {
                 for item in items {
-                    let size = item.args.first().map(|e| match e {
-                        Expr::Number(n) => *n as usize,
-                        _ => 512,
-                    }).unwrap_or(512);
+                    let size = match item.args.first() {
+                        Some(Expr::Number(n)) => *n as usize,
+                        Some(_) => {
+                            return Err(LowerError {
+                                msg: format!(
+                                    "Buffer '{}': external buffer~ references are unsupported in M2 \
+                                     (buffer is a data alias); declare with a numeric size",
+                                    item.name
+                                ),
+                                loc: None,
+                            });
+                        }
+                        None => 512,
+                    };
                     let data_node = self.graph.add_node(Node::data(&item.name, size));
                     let port = Port { node: data_node, index: 0 };
                     self.bindings.insert(item.name.clone(), port);

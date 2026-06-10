@@ -245,3 +245,17 @@ fn data_persists_across_samples() {
     // Don't assert samples 1+ since Param control in testkit isn't straightforward.
     // This test verifies the graph compiles and runs without error.
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  String-arg rejection (no external buffer~ in M2)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn buffer_string_arg_rejected() {
+    let err = opengen_genexpr::parse_and_lower(r#"Buffer b("ext"); out1 = peek(b, 0);"#).unwrap_err();
+    assert!(
+        err.to_string().contains("unsupported in M2"),
+        "expected error about M2 limitation, got: {}",
+        err.to_string()
+    );
+}
