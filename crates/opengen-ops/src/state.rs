@@ -19,7 +19,7 @@ use opengen_ir::StateDecl;
 /// ```
 pub fn history(_inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     // Read previous sample's value from state[0].
-    // StateUpdate (deferred to end of sample) will copy inputs[0] → state[0].
+    // The update function (run at end of sample) copies inputs[0] → state[0].
     // This implements y[n] = x[n-1] with y[0] = 0.0 (zero-initialized).
     state[0]
 }

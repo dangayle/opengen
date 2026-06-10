@@ -75,11 +75,13 @@ impl Patch {
                     self.values[step.value_slot] = inputs.get(*input_index as usize).copied().unwrap_or(0.0);
                 }
                 StepKind::Compute { kernel, inputs: input_slots, state_range } => {
+                    // TODO(perf): allocates per sample; replace with a reusable scratch buffer on Patch for realtime use (most ops have arity <= 2).
                     let input_vals: Vec<f64> = input_slots.iter().map(|&i| self.values[i]).collect();
                     let state_slice = &mut self.state[state_range.clone()];
                     self.values[step.value_slot] = kernel(&input_vals, state_slice, self.sr);
                 }
                 StepKind::Update { update, inputs: input_slots, state_range } => {
+                    // TODO(perf): allocates per sample; replace with a reusable scratch buffer on Patch for realtime use (most ops have arity <= 2).
                     let input_vals: Vec<f64> = input_slots.iter().map(|&i| self.values[i]).collect();
                     update(&input_vals, &mut self.state[state_range.clone()], self.sr);
                 }
@@ -155,23 +157,15 @@ fn compile_impl(
     // Build dependency graph (who depends on whom)
     // For each node, find what nodes feed into it
     for (id, node) in g.nodes() {
-        // Determine arity (how many inputs to check)
-        let arity = match &node.kind {
+        // Determine arity and deferred ports (single OpDef lookup)
+        let (arity, deferred): (u16, &[u16]) = match &node.kind {
             NodeKind::Op { name, .. } => {
                 let op_def = reg.get(name)
                     .ok_or_else(|| CompileError(format!("unknown operator: {}", name)))?;
-                op_def.arity
+                (op_def.arity, op_def.deferred_ports)
             }
-            NodeKind::Output(_) => 1,
-            _ => 0,
-        };
-        
-        // Get deferred ports for this node (port-level cycle breaking)
-        let deferred: &[u16] = match &node.kind {
-            NodeKind::Op { name, .. } => reg.get(name)
-                .ok_or_else(|| CompileError(format!("unknown operator: {}", name)))?
-                .deferred_ports,
-            _ => &[],
+            NodeKind::Output(_) => (1, &[]),
+            _ => (0, &[]),
         };
         
         // Check each input port
@@ -437,5 +431,14 @@ mod tests {
         g.connect(Port { node: bogus, index: 0 }, Port { node: out, index: 0 });
         let err = compile(&g, &opengen_ops::Registry::core(), 48_000.0).unwrap_err();
         assert!(err.to_string().contains("bogus"));
+    }
+
+    #[test]
+    fn one_source_feeding_two_ports_schedules_once() {
+        // out1 = in1 + in1 — same source node on both ports of add
+        let graph = opengen_genexpr::parse_and_lower("out1 = in1 + in1;").unwrap();
+        let mut patch = compile(&graph, &opengen_ops::Registry::core(), 48_000.0).unwrap();
+        assert_eq!(patch.process(&[2.0]), vec![4.0]);
+        assert_eq!(patch.process(&[3.0]), vec![6.0]);
     }
 }
