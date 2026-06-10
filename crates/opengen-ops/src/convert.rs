@@ -534,10 +534,7 @@ pub fn triangle(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
     let duty_raw = inputs[1];
     
     // Wrap phase to [0, 1)
-    let mut phase = phase_raw - phase_raw.floor();
-    if phase < 0.0 {
-        phase += 1.0;
-    }
+    let phase = phase_raw - phase_raw.floor();
     
     // Clamp duty to [0, 1]
     let duty = duty_raw.clamp(0.0, 1.0);
@@ -548,12 +545,10 @@ pub fn triangle(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
         } else {
             phase / duty
         }
+    } else if duty == 1.0 {
+        phase
     } else {
-        if duty == 1.0 {
-            phase
-        } else {
-            1.0 - (phase - duty) / (1.0 - duty)
-        }
+        1.0 - (phase - duty) / (1.0 - duty)
     }
 }
 
@@ -697,5 +692,15 @@ mod tests {
         let denorm = 1e-320; // A denormal number
         let result = fixdenorm(&[denorm], &mut [], 48000.0);
         assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn inverse_hyperbolic_domain_errors_propagate_nan() {
+        assert!(render("out1 = acosh(0.5);", 48_000.0, 1).ch(0)[0].is_nan());
+        assert!(render("out1 = atanh(2);", 48_000.0, 1).ch(0)[0].is_nan());
+        assert!(render("out1 = atanh(1);", 48_000.0, 1).ch(0)[0].is_infinite());
+        assert!(render("out1 = atodb(0 - 1);", 48_000.0, 1).ch(0)[0].is_nan());
+        let ftom_out = render("out1 = ftom(0, 440);", 48_000.0, 1).ch(0)[0];
+        assert!(ftom_out.is_infinite() || ftom_out.is_nan());
     }
 }

@@ -397,4 +397,10 @@ mod tests {
         assert!(out.ch(0)[0].is_infinite());
         assert!(out.ch(0)[0].is_sign_negative());
     }
+
+    #[test]
+    fn log_family_negative_propagates_nan() {
+        assert!(render("out1 = log2(0 - 1);", 48_000.0, 1).ch(0)[0].is_nan());
+        assert!(render("out1 = log10(0 - 1);", 48_000.0, 1).ch(0)[0].is_nan());
+    }
 }
