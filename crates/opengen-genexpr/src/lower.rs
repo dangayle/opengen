@@ -111,8 +111,8 @@ impl<'a> Lowerer<'a> {
                     let init = if let Some(init_expr) = item.args.first() {
                         Self::const_fold(init_expr).ok_or_else(|| LowerError {
                             msg: format!(
-                                "History '{}' init must be a constant expression, got {:?}",
-                                item.name, init_expr
+                                "History '{}' init must be a constant (literal number)",
+                                item.name
                             ),
                             loc: None,
                         })?
@@ -218,10 +218,12 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Try to const-fold an expression to a simple f64 literal.
-    /// Supports number literals only (for now). Returns None if not foldable.
+    /// Supports number literals and unary negation of a constant (e.g., `-5`, `-(-1)`).
+    /// Returns None if not foldable.
     fn const_fold(expr: &Expr) -> Option<f64> {
         match expr {
             Expr::Number(n) => Some(*n),
+            Expr::Unary(UnaryOp::Neg, e) => Self::const_fold(e).map(|v| -v),
             _ => None,
         }
     }

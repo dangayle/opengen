@@ -4,11 +4,14 @@
 //! Since the dataflow graph operates on `f64` values, these operators:
 //! 1. Truncate each input toward zero via `trunc()`.
 //! 2. Convert to `i64` (saturating on overflow per Rust's `as i64` semantics).
+//!    Note: `NaN as i64` yields 0 in Rust — deterministic, not undefined behavior.
 //! 3. Perform the bitwise operation.
 //! 4. Convert the result back to `f64`.
 //!
 //! Shift counts are masked to the range `0..63` (`& 63`), matching hardware behavior
 //! and the GenExpr specification (per gen~ docs: shift count is masked to 6 bits).
+//! Negative shift counts (e.g., `-1`) are converted via `as u64` which wraps around
+//! in two's complement (e.g., `-1i64 as u64` = 18446744073709551615, masked to 63).
 
 use crate::registry::OpDef;
 use opengen_ir::StateDecl;
@@ -77,7 +80,9 @@ pub fn bitxor(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 ///
 /// # Definition
 /// Converts inputs to `i64` via truncation, shifts `a` left by `(b & 63)` bits.
-/// Shift count is masked to 6 bits (0-63) per gen~ spec. Converts result back to `f64`.
+/// Shift count is masked to 6 bits (0-63) per gen~ spec. A negative shift count
+/// wraps through `i64 as u64` (e.g., `-1` → 18446744073709551615 → `& 63` = 63).
+/// Converts result back to `f64`.
 ///
 /// # Documented
 /// gen~ GenExpr guide (operator reference): `<<` is the left shift operator.
@@ -99,7 +104,8 @@ pub fn shl(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 /// # Definition
 /// Converts inputs to `i64` via truncation, shifts `a` right by `(b & 63)` bits
 /// with sign extension (arithmetic shift). Shift count is masked to 6 bits (0-63).
-/// Converts result back to `f64`.
+/// A negative shift count wraps through `i64 as u64` (e.g., `-1` → 18446744073709551615
+/// → `& 63` = 63). Converts result back to `f64`.
 ///
 /// # Documented
 /// gen~ GenExpr guide (operator reference): `>>` is the right shift operator.

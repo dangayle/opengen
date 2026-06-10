@@ -422,6 +422,24 @@ fn m1_param_decl_old_syntax() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  Negative init in History decl (const-fold unary negation)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn history_decl_with_negative_init() {
+    // History h(-5); out1 = h; → first sample should be -5.0
+    let out = render("History h(-5); out1 = h;", 3);
+    assert_eq!(out, vec![-5.0, -5.0, -5.0]);
+}
+
+#[test]
+fn history_decl_with_double_negative_init() {
+    // History h(-(-5)); out1 = h; → first sample should be 5.0
+    let out = render("History h(-(-5)); out1 = h;", 3);
+    assert_eq!(out, vec![5.0, 5.0, 5.0]);
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  Stress: constant expression in non-constant init position
 // ═══════════════════════════════════════════════════════════════════
 
@@ -430,5 +448,5 @@ fn history_decl_nonconstant_init_errors() {
     // Init must be a literal constant expression (not a variable)
     let ast = parse("Param x(5); History h(x); out1 = h;").unwrap();
     let err = lower(&ast).unwrap_err();
-    assert!(err.msg.contains("constant expression") || err.msg.contains("expected"), "got: {}", err.msg);
+    assert!(err.msg.contains("constant") || err.msg.contains("expected"), "got: {}", err.msg);
 }
