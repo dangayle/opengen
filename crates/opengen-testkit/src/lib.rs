@@ -86,6 +86,7 @@ pub fn render_with_probes(
         let frame = patch.process(&[]);
         for (c, v) in channels.iter_mut().zip(frame) { c.push(v); }
     }
+    // Safe: probe_names() returns only registered probes
     let map = patch.probe_names().iter()
         .map(|&name| (name.to_string(), patch.probe(name).unwrap().to_vec()))
         .collect();
@@ -128,5 +129,21 @@ mod tests {
             "h = history(h + 1); out1 = h;", 48_000.0, 3, &["h"]);
         assert_eq!(out.ch(0), &[0.0, 1.0, 2.0]);
         assert_eq!(probes["h"], vec![0.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn render_with_probes_empty_list() {
+        let (out, probes) = render_with_probes("out1 = 1.0;", 48_000.0, 3, &[]);
+        assert_eq!(out.ch(0), &[1.0, 1.0, 1.0]);
+        assert!(probes.is_empty());
+    }
+
+    #[test]
+    fn render_with_probes_multiple_traces() {
+        let (out, probes) = render_with_probes(
+            "a = history(a + 1); b = a * 2; out1 = b;", 48_000.0, 3, &["a", "b"]);
+        assert_eq!(out.ch(0), &[0.0, 2.0, 4.0]);
+        assert_eq!(probes["a"], vec![0.0, 1.0, 2.0]);
+        assert_eq!(probes["b"], vec![0.0, 2.0, 4.0]);
     }
 }
