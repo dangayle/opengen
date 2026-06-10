@@ -139,38 +139,32 @@ fn tap_clamped_to_size() {
     // Write [1,0,0,0,0] (5 samples), tap=10 clamped to 4.
     //
     // Ring math (N=4, cursor at state[0], ring in state[1..4]):
-    // delay_read linear-interp clamps the interpolation index to n-1=3
-    // (to keep both i and i+1 in bounds).  So tap=4 reads nearest index 3.
+    // delay_read linear-interp: tap=4 clamped to 4 (maxdelay).
+    // i = floor(4) = 4, frac = 0. ring_read(cursor, 4, 4) = oldest sample.
     //
     //   Sample 0 (cursor=0, in=1):
-    //     ring_read(0, 3, 4) = state[(0+4-3)%4+1] = state[2] = 0
     //     ring_read(0, 4, 4) = state[(0+4-4)%4+1] = state[1] = 0
     //     out = 0.  Write at ring[0]=state[1]=1, cursor→1
     //   Sample 1 (cursor=1, in=0):
-    //     ring_read(1, 3) = state[(1+4-3)%4+1] = state[3] = 0
     //     ring_read(1, 4) = state[(1+4-4)%4+1] = state[2] = 0
     //     out = 0.  Write at ring[1]=state[2]=0, cursor→2
     //   Sample 2 (cursor=2, in=0):
-    //     ring_read(2, 3) = state[(2+4-3)%4+1] = state[4] = 0
     //     ring_read(2, 4) = state[(2+4-4)%4+1] = state[3] = 0
     //     out = 0.  Write at ring[2]=state[3]=0, cursor→3
     //   Sample 3 (cursor=3, in=0):
-    //     ring_read(3, 3) = state[(3+4-3)%4+1] = state[1] = 1 ← from sample 0!
     //     ring_read(3, 4) = state[(3+4-4)%4+1] = state[4] = 0
-    //     out = 1 + 0*(0-1) = 1.  Write at ring[3]=state[4]=0, cursor→0
+    //     out = 0.  Write at ring[3]=state[4]=0, cursor→0
     //   Sample 4 (cursor=0, in=0):
-    //     ring_read(0, 3) = state[(0+4-3)%4+1] = state[2] = 0
-    //     ring_read(0, 4) = state[(0+4-4)%4+1] = state[1] = 1
-    //     out = 0 + 0*(1-0) = 0.
+    //     ring_read(0, 4) = state[(0+4-4)%4+1] = state[1] = 1 ← the 1!
+    //     out = 1.  Write at ring[0]=state[1]=0, cursor→1
     //
-    // Result: [0, 0, 0, 1, 0] — the 1 appears at sample 3 because
-    // linear interpolation clamps index to n-1, so tap=4 reads 3 samples ago.
+    // Result: [0, 0, 0, 0, 1] — full 4-sample delay (tap=4 = size).
     let out = opengen_testkit::render_with_inputs(
         "Delay d(4); d.write(in1); out1 = d.read(10);",
         48000.0,
         &[&[1.0, 0.0, 0.0, 0.0, 0.0]],
     );
-    assert_eq!(out.ch(0), &[0.0, 0.0, 0.0, 1.0, 0.0]);
+    assert_eq!(out.ch(0), &[0.0, 0.0, 0.0, 0.0, 1.0]);
 }
 
 // ═══════════════════════════════════════════════════════════════════

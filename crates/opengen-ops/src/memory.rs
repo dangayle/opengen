@@ -198,8 +198,9 @@ fn delay_write_update(inputs: &[f64], state: &mut [f64], _sr: f64) {
 /// # Definition
 /// Returns the value from the delay line at tap time `t` (in samples),
 /// clamped to `[1.0, size]`. Linear interpolation:
-/// `i = floor(t)`, `frac = t - i`. Clamp `i` to `[1, size-1]`.
-/// Output = `s(i) + frac * (s(i+1) - s(i))`.
+/// `i = floor(t)`, `frac = t - i`. `i` clamped to `[1, size]`.
+/// Output = `s(i) + frac * (s(i+1) - s(i))` when `i < size`;
+/// when `i == size` (exact full-size tap), `frac == 0` so output = `s(size)`.
 ///
 /// where `s(k)` = sample written `k` samples ago =
 /// `ring[(cursor - k + N) % N]` (cursor is pre-update write position).
@@ -208,7 +209,8 @@ fn delay_write_update(inputs: &[f64], state: &mut [f64], _sr: f64) {
 /// `reference/genlib/gen_dsp/genlib_ops.h`: `read_linear`:
 /// `c = clamp(d, reader!=writer, maxdelay)`;
 /// `r = size + reader - c`; reads `memory[r1 & wrap]` and `memory[r2 & wrap]`
-/// with linear_interp.
+/// with linear_interp. At `d = maxdelay == size` (power-of-two), both indices
+/// wrap around the ring; at `frac == 0` the interpolation term is irrelevant.
 ///
 /// # M2 Limitation
 /// Only `linear` (default) and `none` interpolation modes are supported.
@@ -239,9 +241,10 @@ pub fn delay_read(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     let tap = tap.max(1.0).min(n as f64);
     let i = tap.floor() as usize;
     let frac = tap - tap.floor();
-    let i = i.max(1).min(n.saturating_sub(1));
+    let i = i.max(1).min(n);
     let v0 = ring_read(cursor, i, n, state);
-    let v1 = ring_read(cursor, i + 1, n, state);
+    // At i == n (full-size tap), frac is 0, so v1 doesn't affect result.
+    let v1 = if i < n { ring_read(cursor, i + 1, n, state) } else { v0 };
     v0 + frac * (v1 - v0)
 }
 
