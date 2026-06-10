@@ -8,7 +8,7 @@ These docs are useful for anyone working programmatically with gen~: building sy
 
 ```
 genexpr_language_reference.md   # Complete language reference (operators, syntax, idioms)
-genexpr_grammar.pegjs           # Formal PEG grammar (extracted from Max installation)
+genexpr_grammar.pegjs           # NOT vendored here — proprietary Cycling '74 grammar; the gitignored copy lives at reference/rnbo/genexpr_js/genexpr.pegjs
 genexpr_ebnf.md                 # EBNF for GenExpr syntax (derived from pegjs)
 gendsp_ebnf.md                  # EBNF + semantic constraints for the .gendsp file format
 gendsp_schema.ts                # Zod schema for .gendsp (TypeScript, with generation helpers)

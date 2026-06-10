@@ -26,6 +26,11 @@ while IFS=$'\t' read -r license src dest; do
     full_src="$MAX_RES/$src"
   fi
   
+  if [ ! -d "$full_src" ]; then
+    echo "  SKIP: $full_src not found"
+    continue
+  fi
+  
   echo "[$license] $src -> reference/$dest"
   mkdir -p "$DEST_ROOT/$dest"
   rsync -a --exclude node_modules "$full_src/" "$DEST_ROOT/$dest/"
