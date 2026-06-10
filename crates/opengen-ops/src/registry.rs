@@ -1,15 +1,25 @@
 use opengen_ir::StateDecl;
 
 /// A pure-Rust per-sample kernel: (inputs, state slots, samplerate) -> output.
+/// Kernels MUST NOT read input values arriving on `deferred_ports` (update-phase only).
 pub type Kernel = fn(&[f64], &mut [f64], f64) -> f64;
+/// End-of-sample state update: (inputs, state slots, samplerate).
+/// Runs after ALL Compute steps, in ascending NodeId order (determinism contract).
+pub type UpdateFn = fn(&[f64], &mut [f64], f64);
+/// One-time state initializer at compile: (IR node args, state slots, samplerate).
+pub type InitFn = fn(&[f64], &mut [f64], f64);
 
 pub struct OpDef {
     pub name: &'static str,
     pub arity: u16,
     pub state: StateDecl,
-    /// If true, the compile layer emits a StateUpdate step copying `inputs[0] → state[0]`.
-    /// If false, the kernel manages its own state internally.
-    pub auto_state_update: bool,
+    /// Input ports whose incoming edges do NOT block topological scheduling
+    /// (the "write" ports of feedback-capable ops: history port 0, delay port 0).
+    pub deferred_ports: &'static [u16],
+    /// End-of-sample state writer; None = stateless or kernel-managed state.
+    pub update: Option<UpdateFn>,
+    /// One-time state initializer from IR node args; None = zero-init.
+    pub init: Option<InitFn>,
     pub kernel: Kernel,
 }
 
@@ -38,7 +48,8 @@ mod tests {
         let op = reg.get("add").expect("add registered");
         assert_eq!(op.arity, 2);
         assert_eq!(op.state, opengen_ir::StateDecl::None);
-        assert_eq!(op.auto_state_update, true);
+        assert!(op.update.is_none());
+        assert!(op.deferred_ports.is_empty());
         assert_eq!((op.kernel)(&[1.5, 2.25], &mut [], 48_000.0), 3.75);
     }
 }

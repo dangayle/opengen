@@ -26,7 +26,15 @@ pub fn history(_inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
 
 pub fn defs() -> Vec<OpDef> {
     vec![
-        OpDef { name: "history", arity: 1, state: StateDecl::Slots(1), auto_state_update: true, kernel: history },
+        OpDef {
+            name: "history",
+            arity: 1,
+            state: StateDecl::Slots(1),
+            deferred_ports: &[0],
+            update: Some(|i, s, _| s[0] = i[0]),
+            init: Some(|args, s, _| if let Some(&v) = args.first() { s[0] = v }),
+            kernel: history,
+        },
     ]
 }
 

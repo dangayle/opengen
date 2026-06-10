@@ -198,21 +198,27 @@ pub fn defs() -> Vec<OpDef> {
             name: "phasor",
             arity: 1,
             state: StateDecl::Slots(1),
-            auto_state_update: false, // Self-managed state
+            deferred_ports: &[],
+            update: None,
+            init: None,
             kernel: phasor,
         },
         OpDef {
             name: "cycle",
             arity: 1,
             state: StateDecl::Slots(1),
-            auto_state_update: false, // Self-managed state
+            deferred_ports: &[],
+            update: None,
+            init: None,
             kernel: cycle,
         },
         OpDef {
             name: "noise",
             arity: 0,
             state: StateDecl::Slots(4),
-            auto_state_update: false, // Self-managed state (PRNG)
+            deferred_ports: &[],
+            update: None,
+            init: None,
             kernel: noise,
         },
     ]
@@ -282,8 +288,7 @@ mod tests {
     #[test]
     fn phasor_negative_freq_wrap() {
         // Test negative freq/sr = -1.25: freq=-60000, sr=48000
-        // Note: subtraction expression causes initial freq=0 eval, so we request 4 samples
-        // and check samples[1..]: expected 0.0 (phase at freq=0), 0.75, 0.5
+        // With port-level cycle breaking, phasor sees -60000 from sample 0 (no stale freq artifact)
         let out = render("out1 = phasor(0 - 60000);", 48000.0, 4);
         let samples = out.ch(0);
         
@@ -292,9 +297,10 @@ mod tests {
             assert!(val >= 0.0 && val < 1.0, "Sample {} out of range [0,1): {}", i, val);
         }
         
-        // Check exact values (after initial freq=0 call)
-        assert_eq!(samples[1], 0.0);  // phase=0 at start of first freq=-60000 call
-        assert_eq!(samples[2], 0.75); // phase=0.75 after wrapping -1.25
-        assert_eq!(samples[3], 0.5);  // phase=0.5 after wrapping -0.5
+        // Check exact values: phase starts at 0, each sample wraps -1.25 increment
+        assert_eq!(samples[0], 0.0);  // phase=0 at start
+        assert_eq!(samples[1], 0.75); // phase=0.75 after wrapping -1.25
+        assert_eq!(samples[2], 0.5);  // phase=0.5 after wrapping -0.5
+        assert_eq!(samples[3], 0.25); // phase=0.25 after wrapping 0.25
     }
 }

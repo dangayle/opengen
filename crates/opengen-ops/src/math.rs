@@ -233,18 +233,18 @@ pub fn ceil(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 
 pub fn defs() -> Vec<OpDef> {
     vec![
-        OpDef { name: "add", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: add },
-        OpDef { name: "mul", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: mul },
-        OpDef { name: "sub", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: sub },
-        OpDef { name: "div", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: div },
-        OpDef { name: "mod", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: mod_ },
-        OpDef { name: "neg", arity: 1, state: StateDecl::None, auto_state_update: true, kernel: neg },
-        OpDef { name: "abs", arity: 1, state: StateDecl::None, auto_state_update: true, kernel: abs },
-        OpDef { name: "min", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: min },
-        OpDef { name: "max", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: max },
-        OpDef { name: "pow", arity: 2, state: StateDecl::None, auto_state_update: true, kernel: pow },
-        OpDef { name: "sqrt", arity: 1, state: StateDecl::None, auto_state_update: true, kernel: sqrt },
-        OpDef { name: "floor", arity: 1, state: StateDecl::None, auto_state_update: true, kernel: floor },
-        OpDef { name: "ceil", arity: 1, state: StateDecl::None, auto_state_update: true, kernel: ceil },
+        OpDef { name: "add", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: add },
+        OpDef { name: "mul", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: mul },
+        OpDef { name: "sub", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: sub },
+        OpDef { name: "div", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: div },
+        OpDef { name: "mod", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: mod_ },
+        OpDef { name: "neg", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: neg },
+        OpDef { name: "abs", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: abs },
+        OpDef { name: "min", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: min },
+        OpDef { name: "max", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: max },
+        OpDef { name: "pow", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: pow },
+        OpDef { name: "sqrt", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: sqrt },
+        OpDef { name: "floor", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: floor },
+        OpDef { name: "ceil", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: ceil },
     ]
 }

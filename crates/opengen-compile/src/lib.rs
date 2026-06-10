@@ -22,8 +22,8 @@ enum StepKind {
     CopyInput { input_index: u16 },
     /// Execute kernel: inputs → value_slot
     Compute { kernel: opengen_ops::Kernel, inputs: Vec<usize>, state_range: std::ops::Range<usize> },
-    /// Update state for a stateful node: read input value → state arena
-    StateUpdate { input_slot: usize, state_range: std::ops::Range<usize> },
+    /// End-of-sample update: gather input slots, call the op's UpdateFn.
+    Update { update: opengen_ops::UpdateFn, inputs: Vec<usize>, state_range: std::ops::Range<usize> },
 }
 
 #[derive(Debug)]
@@ -63,7 +63,9 @@ impl Patch {
         names
     }
 
-    /// Process one sample frame. Deterministic order = topo order (ties broken by NodeId).
+    /// Process one sample frame.
+    /// Execution: all Compute steps in topo order (NodeId ties ascending),
+    /// then all Update steps in ascending NodeId order.
     pub fn process(&mut self, inputs: &[f64]) -> Vec<f64> {
         // Execute all steps in order
         for step in &self.steps {
@@ -77,11 +79,9 @@ impl Patch {
                     let state_slice = &mut self.state[state_range.clone()];
                     self.values[step.value_slot] = kernel(&input_vals, state_slice, self.sr);
                 }
-                StepKind::StateUpdate { input_slot, state_range } => {
-                    // Copy current input value into state for next sample.
-                    // M1 contract: input slot 0 → state slot 0 (multi-slot ops own extra slots via kernel).
-                    let val = self.values[*input_slot];
-                    self.state[state_range.start] = val;
+                StepKind::Update { update, inputs: input_slots, state_range } => {
+                    let input_vals: Vec<f64> = input_slots.iter().map(|&i| self.values[i]).collect();
+                    update(&input_vals, &mut self.state[state_range.clone()], self.sr);
                 }
             }
         }
@@ -166,12 +166,20 @@ fn compile_impl(
             _ => 0,
         };
         
+        // Get deferred ports for this node (port-level cycle breaking)
+        let deferred: &[u16] = match &node.kind {
+            NodeKind::Op { name, .. } => reg.get(name)
+                .ok_or_else(|| CompileError(format!("unknown operator: {}", name)))?
+                .deferred_ports,
+            _ => &[],
+        };
+        
         // Check each input port
         for port_idx in 0..arity {
             if let Some(src) = g.input_of(Port { node: id, index: port_idx }) {
                 // Edge from src.node to id
-                // If id is stateful, this edge doesn't create a dependency (breaks cycles)
-                if node.state() == StateDecl::None {
+                // Only create dependency if this port is NOT deferred
+                if !deferred.contains(&port_idx) {
                     *in_degree.get_mut(&id).unwrap() += 1;
                     dependencies.entry(src.node).or_insert_with(Vec::new).push(id);
                 }
@@ -225,9 +233,9 @@ fn compile_impl(
     // Build steps in topo order
     let mut steps = Vec::new();
     let mut values = vec![0.0; node_count];
-    let state = vec![0.0; state_offset];
+    let mut state = vec![0.0; state_offset];
     let mut outputs_map: HashMap<u16, usize> = HashMap::new();
-    let mut stateful_updates = Vec::new(); // Defer state updates to end
+    let mut stateful_updates: Vec<(NodeId, Step)> = Vec::new(); // Defer state updates to end, with NodeId for sorting
     
     for &id in &topo_order {
         let node = g.node(id);
@@ -256,7 +264,7 @@ fn compile_impl(
                 }
                 // No step needed; just marks what to return
             }
-            NodeKind::Op { name, state, .. } => {
+            NodeKind::Op { name, .. } => {
                 let op_def = reg.get(name)
                     .ok_or_else(|| CompileError(format!("unknown operator: {}", name)))?;
                 
@@ -275,51 +283,37 @@ fn compile_impl(
                 
                 let state_range = state_ranges.get(&id).cloned().unwrap_or(0..0);
                 
-                if *state != StateDecl::None {
-                    // Stateful node: emit compute step now (reads old state)
-                    steps.push(Step {
-                        kind: StepKind::Compute {
-                            kernel: op_def.kernel,
-                            inputs: input_slots.clone(),
-                            state_range: state_range.clone(),
-                        },
-                        value_slot,
-                    });
-                    
-                    // Only emit StateUpdate for operators that use the automatic
-                    // input[0] → state[0] copy mechanism (e.g., history).
-                    // Operators with self-managed state (e.g., phasor, noise)
-                    // handle their state updates within the kernel.
-                    if op_def.auto_state_update {
-                        // Defer state update: copy input[0] to state[0]
-                        stateful_updates.push(Step {
-                            kind: StepKind::StateUpdate {
-                                input_slot: input_slots[0],
-                                state_range,
-                            },
-                            value_slot, // Not actually written to, but needed for struct
-                        });
-                    }
-                } else {
-                    // Stateless op: just compute
-                    steps.push(Step {
-                        kind: StepKind::Compute {
-                            kernel: op_def.kernel,
+                // Always emit compute step
+                steps.push(Step {
+                    kind: StepKind::Compute {
+                        kernel: op_def.kernel,
+                        inputs: input_slots.clone(),
+                        state_range: state_range.clone(),
+                    },
+                    value_slot,
+                });
+                
+                // If op has an update function, defer it for end-of-sample execution
+                if let Some(update) = op_def.update {
+                    stateful_updates.push((id, Step {
+                        kind: StepKind::Update {
+                            update,
                             inputs: input_slots,
                             state_range,
                         },
-                        value_slot,
-                    });
+                        value_slot, // Not actually written to, but needed for struct
+                    }));
                 }
             }
         }
     }
     
-    // Append state updates at the end of the step list.
-    // Execution model: all Compute steps run first (stateful nodes output the *last* sample's state),
-    // then StateUpdate steps capture this sample's inputs for the *next* sample. This split is what
-    // implements the y[n] = x[n-1] delay: compute reads old state, update writes current input.
-    steps.extend(stateful_updates);
+    // Sort update steps by NodeId (determinism contract), then append.
+    // Execution model: all Compute steps run first (in topo order with NodeId ties),
+    // then Update steps run in ascending NodeId order. This split implements
+    // y[n] = x[n-1] delay: compute reads old state, update writes current input.
+    stateful_updates.sort_by_key(|(id, _)| id.0);
+    steps.extend(stateful_updates.into_iter().map(|(_, step)| step));
     
     // Build outputs list in order by output index
     // Validate that output indices are contiguous (no gaps)
@@ -338,6 +332,17 @@ fn compile_impl(
         // No outputs: empty graph is valid
         vec![]
     };
+    
+    // Run state initializers
+    for (id, node) in g.nodes() {
+        if let NodeKind::Op { name, args, .. } = &node.kind {
+            if let Some(range) = state_ranges.get(&id) {
+                if let Some(init) = reg.get(name).and_then(|d| d.init) {
+                    init(args, &mut state[range.clone()], sr);
+                }
+            }
+        }
+    }
     
     Ok(Patch { steps, values, state, outputs, sr, probes })
 }
@@ -405,22 +410,23 @@ mod tests {
 
     #[test]
     fn stateful_node_breaks_feedback_cycle() {
-        // A feedback loop through a node marked stateful must compile (cycle is
-        // broken by the deferred state-update). The "add" kernel ignores state,
-        // so this exercises the machinery only; true y[n] = x[n-1] semantics are
-        // specified by `history` (Task 9).
+        // A feedback loop through history must compile (cycle broken by deferred port 0).
+        // history implements true y[n] = x[n-1] delay semantics.
         let mut g = Graph::new();
-        let acc = g.add_node(Node::op("add", vec![], StateDecl::Slots(1)));
+        let add = g.add_node(Node::op("add", vec![], StateDecl::None));
+        let h = g.add_node(Node::op("history", vec![], StateDecl::Slots(1)));
         let one = g.add_node(Node::constant(1.0));
         let out = g.add_node(Node::output(0));
-        g.connect(Port { node: acc, index: 0 }, Port { node: acc, index: 0 }); // feedback
-        g.connect(Port { node: one, index: 0 }, Port { node: acc, index: 1 });
-        g.connect(Port { node: acc, index: 0 }, Port { node: out, index: 0 });
+        // h = history(h + 1); out1 = h;
+        g.connect(Port { node: h, index: 0 }, Port { node: add, index: 0 }); // h feeds add
+        g.connect(Port { node: one, index: 0 }, Port { node: add, index: 1 }); // 1 feeds add
+        g.connect(Port { node: add, index: 0 }, Port { node: h, index: 0 }); // add feeds history (deferred)
+        g.connect(Port { node: h, index: 0 }, Port { node: out, index: 0 }); // h feeds output
         let mut patch = compile(&g, &opengen_ops::Registry::core(), 48_000.0).unwrap();
-        // Each sample reads its own previous output from the value slot: a counter.
+        // Each sample: read old h (starts at 0), compute h+1, update h for next sample
+        assert_eq!(patch.process(&[]), vec![0.0]);
         assert_eq!(patch.process(&[]), vec![1.0]);
         assert_eq!(patch.process(&[]), vec![2.0]);
-        assert_eq!(patch.process(&[]), vec![3.0]);
     }
 
     #[test]
