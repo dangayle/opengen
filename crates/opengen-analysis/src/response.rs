@@ -58,8 +58,10 @@ impl Response {
     /// `hz` must be in the range `[0.0, sr/2.0]` (DC to Nyquist frequency).
     ///
     /// # Interpolation
-    /// Phase is linearly interpolated between FFT bins. Phase wraps near ±π
-    /// are not specially handled (this is an M1 limitation).
+    /// Phase is linearly interpolated between FFT bins. When adjacent bins
+    /// straddle a ±π wrap, the high bin is unwrapped onto the same branch
+    /// before interpolation. The returned phase may exceed ±π by the unwrap
+    /// step; callers should compare phases on the circle (mod 2π).
     ///
     /// # Panics
     /// Panics if `hz` is negative or above the Nyquist frequency.
@@ -80,10 +82,13 @@ impl Response {
             // Exact bin or at Nyquist
             self.spectrum[bin_lo.min(self.spectrum.len() - 1)].arg()
         } else {
-            // Interpolate phase (unwrapped)
+            // Interpolate phase, unwrapping the bin-to-bin jump onto the same branch:
             let frac = exact_bin - bin_lo as f64;
             let phase_lo = self.spectrum[bin_lo].arg();
-            let phase_hi = self.spectrum[bin_hi].arg();
+            let mut phase_hi = self.spectrum[bin_hi].arg();
+            // Shift phase_hi by multiples of 2π so |phase_hi - phase_lo| <= π (nearest branch).
+            while phase_hi - phase_lo > std::f64::consts::PI { phase_hi -= 2.0 * std::f64::consts::PI; }
+            while phase_hi - phase_lo < -std::f64::consts::PI { phase_hi += 2.0 * std::f64::consts::PI; }
             phase_lo + frac * (phase_hi - phase_lo)
         }
     }
@@ -165,6 +170,27 @@ mod tests {
         let src = "out1 = in1;";
         let h = freq_response(src, 48_000.0, 8192);
         h.phase_at(48_000.0); // sr = 48000, Nyquist = 24000
+    }
+    
+    #[test]
+    fn phase_at_interpolates_across_pi_wrap() {
+        // 8-sample delay: phase(f) = -2π·8·f/sr (mod 2π). With nfft = 64 the bin
+        // spacing is 750 Hz at 48 kHz. The wrap from -π to +π occurs at bin 4 (3000 Hz).
+        // Bin 3 has phase -0.75π, bin 4 wraps to +π. Interpolation between them
+        // must unwrap, not average -0.75π with +π.
+        let src = "a = history(in1); b = history(a); c = history(b); d = history(c);
+                   e = history(d); f = history(e); g = history(f); h = history(g);
+                   out1 = h;";
+        let r = freq_response(src, 48_000.0, 64);
+        // Query midway between bins 3 (2250 Hz) and 4 (3000 Hz):
+        let f_hz = 2_625.0;
+        let expected = -2.0 * PI * 8.0 * f_hz / 48_000.0; // = -0.875π
+        let got = r.phase_at(f_hz);
+        // Compare on the wrapped circle: difference modulo 2π should be ~0
+        let mut diff = (got - expected) % (2.0 * PI);
+        if diff > PI { diff -= 2.0 * PI; }
+        if diff < -PI { diff += 2.0 * PI; }
+        assert!(diff.abs() < 1e-6, "phase {got} vs expected {expected} (diff {diff})");
     }
 }
 
