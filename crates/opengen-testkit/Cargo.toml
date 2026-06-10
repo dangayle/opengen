@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+opengen-ir.workspace = true
 opengen-genexpr.workspace = true
 opengen-compile.workspace = true
 opengen-ops.workspace = true
