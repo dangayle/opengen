@@ -6,6 +6,30 @@ use opengen_ops::Registry;
 use std::cell::Cell;
 use std::collections::HashMap;
 
+// ---------------------------------------------------------------------------
+// Abstraction resolver trait
+// ---------------------------------------------------------------------------
+
+/// Resolver for abstraction-as-function calls from codeboxes.
+///
+/// When the lowerer encounters a call to an unknown name, it consults the
+/// resolver. The resolver loads the abstraction, lowers it into the host
+/// graph, and returns the output ports wired to the internal abstraction
+/// nodes. Positional `args` map to `in N`; named args override `Param` defaults.
+///
+/// If the resolver returns `Ok(None)`, the lowerer reports the original
+/// "unknown function" error (no match).
+pub trait AbstractionResolver {
+    fn resolve(
+        &mut self,
+        name: &str,
+        args: &[Port],
+        named: &[(String, f64)],
+        graph: &mut Graph,
+        registry: &Registry,
+    ) -> Result<Option<Vec<Port>>, String>;
+}
+
 /// Builtin constants that GenExpr resolves in identifier position (unless shadowed).
 ///
 /// # Documented
@@ -238,10 +262,18 @@ pub struct Lowerer<'a, 'b> {
     delay_bindings: HashMap<String, DelayInfo>,
     /// Counter for unique synthetic Data node names
     delay_counter: u32,
+    /// Optional resolver for abstraction-as-function calls.
+    /// The resolver must be `'static` (owned) since it may be called
+    /// from multiple code locations; in practice this means the
+    /// resolver struct owns all its data.
+    resolver: Option<Box<dyn AbstractionResolver + 'static>>,
 }
 
 impl<'a, 'b> Lowerer<'a, 'b> {
-    pub fn new(registry: &'a Registry, graph: &'b mut Graph) -> Self {
+    pub fn new(
+        registry: &'a Registry,
+        graph: &'b mut Graph,
+    ) -> Self {
         Self {
             graph,
             registry,
@@ -249,6 +281,24 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             region_stateful_idx: Cell::new(0),
             delay_bindings: HashMap::new(),
             delay_counter: 0,
+            resolver: None,
+        }
+    }
+
+    /// Create a Lowerer with an optional abstraction resolver.
+    pub fn new_with_resolver(
+        registry: &'a Registry,
+        graph: &'b mut Graph,
+        resolver: Option<Box<dyn AbstractionResolver + 'static>>,
+    ) -> Self {
+        Self {
+            graph,
+            registry,
+            bindings: HashMap::new(),
+            region_stateful_idx: Cell::new(0),
+            delay_bindings: HashMap::new(),
+            delay_counter: 0,
+            resolver,
         }
     }
 
@@ -313,6 +363,39 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     } else {
                         // Normal assignment
                         self.try_lower_statement(stmt)?;
+                    }
+                }
+                StatementKind::MultiAssign { names, expr } => {
+                    // MultiAssign is only supported via the abstraction resolver.
+                    match expr {
+                        Expr::Call { name: call_name, args, named_args } => {
+                            match self.try_resolve_abstraction_multi(call_name, args, named_args) {
+                                Ok(outputs) => {
+                                    for (i, target_name) in names.iter().enumerate() {
+                                        let port = if i < outputs.len() {
+                                            outputs[i]
+                                        } else {
+                                            let c = self.graph.add_node(Node::constant(0.0));
+                                            Port { node: c, index: 0 }
+                                        };
+                                        self.bindings.insert(target_name.clone(), port);
+                                        if let Some(output_idx) = parse_output_name(target_name) {
+                                            out_ports.push((output_idx, port));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    return Err(e);
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(LowerError {
+                                msg: "multi-assign only supported for function calls (straight-line codebox)"
+                                    .to_string(),
+                                loc: Some(stmt.loc),
+                            });
+                        }
                     }
                 }
                 _ => {
@@ -1228,9 +1311,23 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     });
                 }
 
-                let op_def = self.registry.get(name).ok_or_else(|| LowerError {
-                    msg: format!("unknown function: {}", name),
-                    loc: None,
+                let op_def = self.registry.get(name).ok_or_else(|| {
+                    // Check if a resolver is present — give a clear error about
+                    // abstraction calls inside control flow not being supported.
+                    if self.resolver.is_some() {
+                        LowerError {
+                            msg: format!(
+                                "abstraction call '{}' inside control flow is not supported in M2",
+                                name
+                            ),
+                            loc: None,
+                        }
+                    } else {
+                        LowerError {
+                            msg: format!("unknown function: {}", name),
+                            loc: None,
+                        }
+                    }
                 })?;
 
                 if args.len() != op_def.arity as usize {
@@ -1556,7 +1653,18 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             StatementKind::Return(_) => {
                 Err(LowerError { msg: "return not yet implemented (Task 14–16)".to_string(), loc: None })
             }
-            StatementKind::MultiAssign { .. } => {
+            StatementKind::MultiAssign { expr, .. } => {
+                if self.resolver.is_some() {
+                    if let Expr::Call { name, .. } = expr {
+                        return Err(LowerError {
+                            msg: format!(
+                                "abstraction call '{}' inside control flow is not supported in M2",
+                                name
+                            ),
+                            loc: None,
+                        });
+                    }
+                }
                 Err(LowerError { msg: "multi-assign not yet implemented (Task 16)".to_string(), loc: None })
             }
             StatementKind::FuncDecl { .. } => {
@@ -1665,6 +1773,140 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         }
     }
 
+    /// Try resolving a call to an unknown name as an abstraction.
+    ///
+    /// Lowers all arguments, then if a resolver is present, calls it.
+    /// Returns the first output port on success, or the original "unknown function" error.
+    fn try_resolve_abstraction_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        named_args: &[(String, Expr)],
+    ) -> Result<Port, LowerError> {
+        let no_resolver_err = || LowerError {
+            msg: format!("unknown function: {}", name),
+            loc: None,
+        };
+
+        // Lower argument expressions to ports first
+        let arg_ports: Vec<Port> = args
+            .iter()
+            .map(|a| self.lower_expr(a))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Const-fold named args to (String, f64)
+        let mut named_const: Vec<(String, f64)> = Vec::new();
+        for (n, e) in named_args {
+            match Lowerer::const_fold(e) {
+                Some(v) => named_const.push((n.clone(), v)),
+                None => {
+                    return Err(LowerError {
+                        msg: format!(
+                            "named argument '{}' in call to '{}' must be a numeric literal",
+                            n, name
+                        ),
+                        loc: None,
+                    });
+                }
+            }
+        }
+
+        // Call resolver using raw pointer to avoid borrow conflicts with resolver field
+        // SAFETY: self.graph and self.resolver are different fields, and we hold &mut self
+        // which guarantees exclusive access. We use a raw pointer so the borrow checker
+        // doesn't see a conflict between self.resolver (mutable access to one field) and
+        // self.graph (passed to the resolver).
+        if self.resolver.is_some() {
+            let graph_ptr: *mut Graph = self.graph;
+            match self.resolver.as_mut() {
+                Some(resolver) => {
+                    let graph = unsafe { &mut *graph_ptr };
+                    match resolver.resolve(name, &arg_ports, &named_const, graph, self.registry) {
+                        Ok(Some(mut outputs)) => {
+                            if outputs.is_empty() {
+                                // No outputs — this should normally not happen
+                                return Err(LowerError {
+                                    msg: format!("abstraction '{}' produced no outputs", name),
+                                    loc: None,
+                                });
+                            }
+                            // Return first output port for single-return call sites
+                            let port = outputs.remove(0);
+                            return Ok(port);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            return Err(LowerError {
+                                msg: format!("abstraction '{}': {}", name, e),
+                                loc: None,
+                            });
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+
+        Err(no_resolver_err())
+    }
+
+    /// Resolve an abstraction call from a MultiAssign statement, returning ALL output ports.
+    /// Used by `lower_embedded_straightline` for `a, b = absname(x);` patterns.
+    fn try_resolve_abstraction_multi(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        named_args: &[(String, Expr)],
+    ) -> Result<Vec<Port>, LowerError> {
+        let no_resolver_err = || LowerError {
+            msg: format!("unknown function: {}", name),
+            loc: None,
+        };
+
+        let arg_ports: Vec<Port> = args
+            .iter()
+            .map(|a| self.lower_expr(a))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut named_const: Vec<(String, f64)> = Vec::new();
+        for (n, e) in named_args {
+            match Lowerer::const_fold(e) {
+                Some(v) => named_const.push((n.clone(), v)),
+                None => {
+                    return Err(LowerError {
+                        msg: format!(
+                            "named argument '{}' in call to '{}' must be a numeric literal",
+                            n, name
+                        ),
+                        loc: None,
+                    });
+                }
+            }
+        }
+
+        if self.resolver.is_some() {
+            let graph_ptr: *mut Graph = self.graph;
+            match self.resolver.as_mut() {
+                Some(resolver) => {
+                    let graph = unsafe { &mut *graph_ptr };
+                    match resolver.resolve(name, &arg_ports, &named_const, graph, self.registry) {
+                        Ok(Some(outputs)) => return Ok(outputs),
+                        Ok(None) => {}
+                        Err(e) => {
+                            return Err(LowerError {
+                                msg: format!("abstraction '{}': {}", name, e),
+                                loc: None,
+                            });
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+
+        Err(no_resolver_err())
+    }
+
     fn lower_expr(&mut self, expr: &Expr) -> Result<Port, LowerError> {
         match expr {
             Expr::Number(n) => {
@@ -1749,15 +1991,14 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 Ok(Port { node: op_node, index: 0 })
             }
             Expr::Call { name, args, named_args } => {
-                if !named_args.is_empty() {
-                    return Err(LowerError {
-                        msg: format!("named arguments not yet implemented for '{}'", name),
-                        loc: None,
-                    });
-                }
-
                 // Special case: peek/poke — first arg is a data name (identifier), not a value.
                 if name == "peek" || name == "poke" {
+                    if !named_args.is_empty() {
+                        return Err(LowerError {
+                            msg: format!("named arguments not yet implemented for '{}'", name),
+                            loc: None,
+                        });
+                    }
                     if args.is_empty() {
                         return Err(LowerError {
                             msg: format!("function '{}' requires a data name as first argument", name),
@@ -1805,27 +2046,36 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     return Ok(Port { node: op_node, index: 0 });
                 }
 
-                let op_def = self.registry.get(name)
-                    .ok_or_else(|| LowerError { msg: format!("unknown function: {}", name), loc: None })?;
+                // Try registry first
+                if let Some(op_def) = self.registry.get(name) {
+                    if !named_args.is_empty() {
+                        return Err(LowerError {
+                            msg: format!("named arguments not yet implemented for '{}'", name),
+                            loc: None,
+                        });
+                    }
+                    if args.len() != op_def.arity as usize {
+                        return Err(LowerError {
+                            msg: format!(
+                                "function '{}' expects {} arguments, got {}",
+                                name, op_def.arity, args.len()
+                            ),
+                            loc: None,
+                        });
+                    }
 
-                if args.len() != op_def.arity as usize {
-                    return Err(LowerError {
-                        msg: format!(
-                            "function '{}' expects {} arguments, got {}",
-                            name, op_def.arity, args.len()
-                        ),
-                        loc: None,
-                    });
+                    let op_node = self.graph.add_node(Node::op(name, vec![], op_def.state));
+
+                    for (i, arg) in args.iter().enumerate() {
+                        let arg_port = self.lower_expr(arg)?;
+                        self.graph.connect(arg_port, Port { node: op_node, index: i as u16 });
+                    }
+
+                    return Ok(Port { node: op_node, index: 0 });
                 }
 
-                let op_node = self.graph.add_node(Node::op(name, vec![], op_def.state));
-
-                for (i, arg) in args.iter().enumerate() {
-                    let arg_port = self.lower_expr(arg)?;
-                    self.graph.connect(arg_port, Port { node: op_node, index: i as u16 });
-                }
-
-                Ok(Port { node: op_node, index: 0 })
+                // Try abstraction resolver for unknown names
+                return self.try_resolve_abstraction_call(name, args, named_args);
             }
             Expr::MemberCall { object, method, args, named_args } => {
                 // Only delay member calls are supported.
@@ -1992,7 +2242,6 @@ fn has_stmt_control_flow(stmt: &Statement) -> bool {
         | StatementKind::Break
         | StatementKind::Continue => true,
         StatementKind::Return(_)
-        | StatementKind::MultiAssign { .. }
         | StatementKind::FuncDecl { .. } => true, // These also need region path
         _ => false,
     }
@@ -2004,8 +2253,10 @@ pub fn lower(program: &Program) -> Result<Graph, LowerError> {
     crate::inline::inline_functions(&mut program)?;
     let registry = Registry::core();
     let mut graph = Graph::new();
-    let mut lowerer = Lowerer::new(&registry, &mut graph);
-    lowerer.lower(&program)?;
+    {
+        let mut lowerer = Lowerer::new(&registry, &mut graph);
+        lowerer.lower(&program)?;
+    }
     Ok(graph)
 }
 
@@ -2049,6 +2300,23 @@ pub fn lower_embedded(
     let mut program = program.clone();
     crate::inline::inline_functions(&mut program)?;
     let mut lowerer = Lowerer::new(registry, graph);
+    lowerer.lower_embedded(&program, seeded_inputs.clone())
+}
+
+/// Lower a GenExpr program into an existing graph with an abstraction resolver.
+///
+/// Same as `lower_embedded` but accepts an optional `AbstractionResolver` for
+/// resolving unknown call names as abstractions (`.gendsp` files).
+pub fn lower_embedded_with_resolver(
+    program: &Program,
+    seeded_inputs: &HashMap<String, Port>,
+    graph: &mut Graph,
+    registry: &Registry,
+    resolver: Option<Box<dyn AbstractionResolver + 'static>>,
+) -> Result<Vec<(u16, Port)>, LowerError> {
+    let mut program = program.clone();
+    crate::inline::inline_functions(&mut program)?;
+    let mut lowerer = Lowerer::new_with_resolver(registry, graph, resolver);
     lowerer.lower_embedded(&program, seeded_inputs.clone())
 }
 

@@ -8,7 +8,7 @@ pub mod inline;
 
 pub use ast::{Program, Statement, StatementKind, Expr, BinOpKind, SourceLoc,
     DeclType, Declarator, UnaryOp};
-pub use lower::{lower, lower_embedded, LowerError};
+pub use lower::{lower, lower_embedded, lower_embedded_with_resolver, AbstractionResolver, LowerError};
 
 use opengen_ir::Graph;
 

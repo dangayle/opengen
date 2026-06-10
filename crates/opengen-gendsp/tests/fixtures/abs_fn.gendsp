@@ -1,0 +1,18 @@
+{
+  "patcher": {
+    "fileversion": 1,
+    "classnamespace": "dsp.gen",
+    "rect": [0, 0, 400, 200],
+    "boxes": [
+      {"box": {"id": "i1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+      {"box": {"id": "pm", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "param k 2"}},
+      {"box": {"id": "mpy", "maxclass": "newobj", "numinlets": 2, "numoutlets": 1, "text": "*"}},
+      {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+    ],
+    "lines": [
+      {"patchline": {"source": ["i1", 0], "destination": ["mpy", 0]}},
+      {"patchline": {"source": ["pm", 0], "destination": ["mpy", 1]}},
+      {"patchline": {"source": ["mpy", 0], "destination": ["o1", 0]}}
+    ]
+  }
+}

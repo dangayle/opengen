@@ -94,6 +94,8 @@ fn fixture_every_fixture_loads_and_renders() {
         ("codebox_with_control_flow", include_str!("fixtures/codebox_with_control_flow.gendsp")),
         ("mc_channel_constant_one", include_str!("fixtures/mc_channel_constant_one.gendsp")),
         ("history_named_e2e", include_str!("fixtures/history_named_e2e.gendsp")),
+        ("abs_fn", include_str!("fixtures/abs_fn.gendsp")),
+        ("mr", include_str!("fixtures/mr.gendsp")),
     ];
     for (name, content) in fixtures {
         let j = json::parse(content)
@@ -184,6 +186,196 @@ fn fixture_history_named_e2e() {
     let trace = patch.probe("h1").unwrap();
     // h1 starts at 0, first sample: history(in1=1.0) → 0, second: history(in1=0.0) → 1.0
     assert_eq!(trace.len(), 2);
+}
+
+// ─── Codebox abstraction-as-function tests (M2) ──────────────────────
+
+/// codebox calls abstraction `y = abs_fn(in1); out1 = y;` with abs_fn.gendsp
+/// (in 1 → ×param k default 2 → out 1) → in1 × 2.
+#[test]
+fn codebox_abstraction_basic() {
+    let dir = std::env::temp_dir().join("opengen_test_codebox_abs");
+    let _ = std::fs::create_dir_all(&dir);
+
+    // Write abstraction file
+    let abs_bytes = include_bytes!("fixtures/abs_fn.gendsp");
+    std::fs::write(dir.join("abs_fn.gendsp"), abs_bytes).unwrap();
+
+    // Write host file with codebox calling abs_fn
+    let host_content = br#"{
+        "patcher": {
+            "fileversion": 1,
+            "boxes": [
+                {"box": {"id": "i1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                {"box": {"id": "cb", "maxclass": "codebox", "numinlets": 1, "numoutlets": 1, "code": "y = abs_fn(in1); out1 = y;"}},
+                {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+            ],
+            "lines": [
+                {"patchline": {"source": ["i1", 0], "destination": ["cb", 0]}},
+                {"patchline": {"source": ["cb", 0], "destination": ["o1", 0]}}
+            ]
+        }
+    }"#;
+    let host_path = dir.join("host.gendsp");
+    std::fs::write(&host_path, host_content).unwrap();
+
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![dir.clone()] };
+    let graph = opengen_gendsp::load_gendsp(&host_path, &opts).unwrap();
+    let out = opengen_testkit::render_graph_with_inputs(&graph, 48000.0, &[&[7.0]], 1);
+    assert_eq!(out.ch(0), &[14.0], "abs_fn with default k=2 should multiply by 2");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// named arg `y = abs_fn(in1, k=5);` → in1 × 5.
+#[test]
+fn codebox_abstraction_named_arg() {
+    let dir = std::env::temp_dir().join("opengen_test_codebox_abs_named");
+    let _ = std::fs::create_dir_all(&dir);
+
+    let abs_bytes = include_bytes!("fixtures/abs_fn.gendsp");
+    std::fs::write(dir.join("abs_fn.gendsp"), abs_bytes).unwrap();
+
+    let host_content = br#"{
+        "patcher": {
+            "fileversion": 1,
+            "boxes": [
+                {"box": {"id": "i1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                {"box": {"id": "cb", "maxclass": "codebox", "numinlets": 1, "numoutlets": 1, "code": "y = abs_fn(in1, k=5); out1 = y;"}},
+                {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+            ],
+            "lines": [
+                {"patchline": {"source": ["i1", 0], "destination": ["cb", 0]}},
+                {"patchline": {"source": ["cb", 0], "destination": ["o1", 0]}}
+            ]
+        }
+    }"#;
+    let host_path = dir.join("host.gendsp");
+    std::fs::write(&host_path, host_content).unwrap();
+
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![dir.clone()] };
+    let graph = opengen_gendsp::load_gendsp(&host_path, &opts).unwrap();
+    let out = opengen_testkit::render_graph_with_inputs(&graph, 48000.0, &[&[3.0]], 1);
+    assert_eq!(out.ch(0), &[15.0], "abs_fn with k=5 should multiply by 5");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// multi-return `a, b = mr(in1);` → out1 = a + b.
+#[test]
+fn codebox_abstraction_multi_return() {
+    let dir = std::env::temp_dir().join("opengen_test_codebox_mr");
+    let _ = std::fs::create_dir_all(&dir);
+
+    let mr_bytes = include_bytes!("fixtures/mr.gendsp");
+    std::fs::write(dir.join("mr.gendsp"), mr_bytes).unwrap();
+
+    let host_content = br#"{
+        "patcher": {
+            "fileversion": 1,
+            "boxes": [
+                {"box": {"id": "i1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                {"box": {"id": "cb", "maxclass": "codebox", "numinlets": 1, "numoutlets": 1, "code": "a, b = mr(in1); out1 = a + b;"}},
+                {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+            ],
+            "lines": [
+                {"patchline": {"source": ["i1", 0], "destination": ["cb", 0]}},
+                {"patchline": {"source": ["cb", 0], "destination": ["o1", 0]}}
+            ]
+        }
+    }"#;
+    let host_path = dir.join("host.gendsp");
+    std::fs::write(&host_path, host_content).unwrap();
+
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![dir.clone()] };
+    let graph = opengen_gendsp::load_gendsp(&host_path, &opts).unwrap();
+    // mr: out1 = in1, out2 = in1 * 3. So a + b = in1 * 1 + in1 * 3 = in1 * 4.
+    let out = opengen_testkit::render_graph_with_inputs(&graph, 48000.0, &[&[10.0]], 1);
+    assert_eq!(out.ch(0), &[40.0], "mr should produce in1 + in1*3 = in1*4");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// control-flow codebox calling an abstraction → clear error.
+#[test]
+fn codebox_abstraction_control_flow_error() {
+    let dir = std::env::temp_dir().join("opengen_test_codebox_cf");
+    let _ = std::fs::create_dir_all(&dir);
+
+    let abs_bytes = include_bytes!("fixtures/abs_fn.gendsp");
+    std::fs::write(dir.join("abs_fn.gendsp"), abs_bytes).unwrap();
+
+    let host_content = br#"{
+        "patcher": {
+            "fileversion": 1,
+            "boxes": [
+                {"box": {"id": "i1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                {"box": {"id": "cb", "maxclass": "codebox", "numinlets": 1, "numoutlets": 1, "code": "x = 0; if (in1 > 0.5) { x = abs_fn(in1); } out1 = x;"}},
+                {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+            ],
+            "lines": [
+                {"patchline": {"source": ["i1", 0], "destination": ["cb", 0]}},
+                {"patchline": {"source": ["cb", 0], "destination": ["o1", 0]}}
+            ]
+        }
+    }"#;
+    let host_path = dir.join("host.gendsp");
+    std::fs::write(&host_path, host_content).unwrap();
+
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![dir.clone()] };
+    let result = opengen_gendsp::load_gendsp(&host_path, &opts);
+    match result {
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(msg.contains("if") || msg.contains("control"),
+                "error should mention control flow issue: {}", msg);
+            eprintln!("codebox abstraction control flow error: {}", msg);
+        }
+        Ok(_) => panic!("expected error for codebox with control flow + abstraction call, got Ok"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// unknown name with no resolver match → op-not-found error.
+#[test]
+fn codebox_abstraction_unknown_name() {
+    let dir = std::env::temp_dir().join("opengen_test_codebox_unknown");
+    let _ = std::fs::create_dir_all(&dir);
+
+    let host_content = br#"{
+        "patcher": {
+            "fileversion": 1,
+            "boxes": [
+                {"box": {"id": "i1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                {"box": {"id": "cb", "maxclass": "codebox", "numinlets": 1, "numoutlets": 1, "code": "out1 = nonexistent(in1);"}},
+                {"box": {"id": "o1", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+            ],
+            "lines": [
+                {"patchline": {"source": ["i1", 0], "destination": ["cb", 0]}},
+                {"patchline": {"source": ["cb", 0], "destination": ["o1", 0]}}
+            ]
+        }
+    }"#;
+    let host_path = dir.join("host.gendsp");
+    std::fs::write(&host_path, host_content).unwrap();
+
+    let opts = opengen_gendsp::LoadOptions { search_paths: vec![dir.clone()] };
+    let result = opengen_gendsp::load_gendsp(&host_path, &opts);
+    match result {
+        Err(e) => {
+            let msg = e.to_string();
+            // The resolver checks search paths, finds no match, returns Ok(None),
+            // and the lowerer falls through to "unknown function" error.
+            assert!(msg.contains("unknown function")
+                || msg.contains("nonexistent"),
+                "error should mention unknown function: {}", msg);
+            eprintln!("unknown name error: {}", msg);
+        }
+        Ok(_) => panic!("expected error for unknown function in codebox, got Ok"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ─── Reference example file tests (skip-if-missing) ────────────────

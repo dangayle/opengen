@@ -655,9 +655,23 @@ fn build_graph_from_patcher(
             seeded_inputs.insert(in_name, p);
         }
 
-        let new_ports = opengen_genexpr::lower_embedded(
-            &program, &seeded_inputs, host_graph, registry,
-        ).map_err(|e| GendspError::Build(format!("codebox '{}': {}", bx.id, e)))?;
+        // Use abstraction resolver if search paths are available
+        let has_search = !resolve_ctx.search_paths.is_empty() || resolve_ctx.base_dir.is_some();
+        let new_ports = if has_search {
+            let resolver = GendspAbstractionResolver {
+                search_paths: resolve_ctx.search_paths.clone(),
+                base_dir: resolve_ctx.base_dir.clone(),
+                next_sub_idx: 0,
+            };
+            opengen_genexpr::lower_embedded_with_resolver(
+                &program, &seeded_inputs, host_graph, registry,
+                Some(Box::new(resolver)),
+            )
+        } else {
+            opengen_genexpr::lower_embedded(
+                &program, &seeded_inputs, host_graph, registry,
+            )
+        }.map_err(|e| GendspError::Build(format!("codebox '{}': {}", bx.id, e)))?;
 
         // Replace the old placeholder outlet(s) with new lowered ports
         for &(out_idx, new_port) in &new_ports {
@@ -981,6 +995,230 @@ pub fn load_patcher_from_path(path: &Path) -> Result<Patcher, GendspError> {
         .map_err(|e| GendspError::Json(e.to_string()))?;
     Patcher::from_json(&j)
         .map_err(GendspError::Build)
+}
+
+// ---------------------------------------------------------------------------
+// Abstraction resolver for codebox calls
+// ---------------------------------------------------------------------------
+
+/// Resolver for abstraction-as-function calls from codeboxes in `.gendsp` files.
+///
+/// Implements `opengen_genexpr::AbstractionResolver` by resolving the call name
+/// as a `.gendsp` file on the search path, building the abstraction graph, and
+/// inlining it into the host graph with per-call-site prefixing.
+///
+/// This resolver owns all its data (`'static`) — it clones search paths and
+/// builds each abstraction with a fresh `ResolveCtx`. Cross-call caching and
+/// cycle detection across abstraction calls inside a single codebox are not
+/// needed for M2 (each codebox call is a single name, called once).
+struct GendspAbstractionResolver {
+    search_paths: Vec<PathBuf>,
+    base_dir: Option<PathBuf>,
+    next_sub_idx: u32,
+}
+
+impl GendspAbstractionResolver {
+    fn alloc_sub_idx(&mut self) -> u32 {
+        let idx = self.next_sub_idx;
+        self.next_sub_idx += 1;
+        idx
+    }
+}
+
+impl opengen_genexpr::AbstractionResolver for GendspAbstractionResolver {
+    fn resolve(
+        &mut self,
+        name: &str,
+        args: &[Port],
+        named: &[(String, f64)],
+        graph: &mut Graph,
+        registry: &Registry,
+    ) -> Result<Option<Vec<Port>>, String> {
+        // Ignore peek/poke (they have special registry handling)
+        if name == "peek" || name == "poke" || name == "delay_write" || name == "delay_read" {
+            return Ok(None);
+        }
+
+        // If the name is already a registered operator, don't resolve
+        if registry.get(name).is_some() {
+            return Ok(None);
+        }
+
+        // Resolve the abstraction file
+        let path = resolve_abstraction_file(
+            name,
+            self.base_dir.as_deref(),
+            &self.search_paths,
+        );
+
+        let path = match path {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        // Load patcher from disk (no caching needed for M2 — each resolution
+        // is for a distinct call site)
+        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        let j = crate::json::parse_embedded(&bytes).map_err(|e| e.to_string())?;
+        let patcher = Patcher::from_json(&j).map_err(|e| e.to_string())?;
+
+        // Build the abstraction's sub-graph using a fresh ResolveCtx.
+        // The abstraction is a complete patcher; internal subpatchers are
+        // resolved within this fresh context.
+        let sub_idx = self.alloc_sub_idx();
+        let sub_graph = build_graph_with(
+            &patcher,
+            registry,
+            &mut ResolveCtx::new(self.search_paths.clone(), self.base_dir.clone()),
+        ).map_err(|e| format!("building abstraction '{}': {}", name, e))?;
+
+        // Collect in/out node info from sub_graph
+        let mut sub_in_nodes: HashMap<u16, NodeId> = HashMap::new();
+        let mut sub_out_nodes: HashMap<u16, NodeId> = HashMap::new();
+        for (id, node) in sub_graph.nodes() {
+            match &node.kind {
+                opengen_ir::NodeKind::Input(idx) => { sub_in_nodes.insert(*idx, id); }
+                opengen_ir::NodeKind::Output(idx) => { sub_out_nodes.insert(*idx, id); }
+                _ => {}
+            }
+        }
+
+        // ── Step 1: Copy internal nodes (non-Input/Output) with prefixing ────
+        // Named arg overrides are handled during copy by adjusting Param defaults.
+        let mut node_map: HashMap<NodeId, NodeId> = HashMap::new();
+        for (id, node) in sub_graph.nodes() {
+            if matches!(&node.kind,
+                opengen_ir::NodeKind::Input(_) | opengen_ir::NodeKind::Output(_)
+            ) {
+                continue;
+            }
+            let prefixed = match &node.kind {
+                opengen_ir::NodeKind::Param { name: pname, default } => {
+                    let prefixed_name = format!("sub{}/{}", sub_idx, pname);
+                    // Override default with named arg if present
+                    let adjusted_default = if let Some((_, v)) = named.iter().find(|(n, _)| n == pname) {
+                        *v
+                    } else {
+                        *default
+                    };
+                    Node::param(&prefixed_name, adjusted_default)
+                }
+                opengen_ir::NodeKind::Data { name: dname, size } => {
+                    let prefixed_name = format!("sub{}/{}", sub_idx, dname);
+                    Node::data(&prefixed_name, *size)
+                }
+                opengen_ir::NodeKind::Op { name: oname, args, state, data_ref } => {
+                    let prefixed_ref = data_ref.as_ref().map(|dr| format!("sub{}/{}", sub_idx, dr));
+                    Node {
+                        kind: opengen_ir::NodeKind::Op {
+                            name: oname.clone(),
+                            args: args.clone(),
+                            state: *state,
+                            data_ref: prefixed_ref,
+                        },
+                    }
+                }
+                _ => node.clone(),
+            };
+            let new_id = graph.add_node(prefixed);
+            node_map.insert(id, new_id);
+        }
+
+        // ── Step 2: Copy edges between internal nodes only ────
+        for (sub_node_id, _) in sub_graph.nodes() {
+            let kind = &sub_graph.node(sub_node_id).kind;
+            if matches!(kind,
+                opengen_ir::NodeKind::Input(_) | opengen_ir::NodeKind::Output(_)
+            ) {
+                continue;
+            }
+            for inlet in 0..16u16 {
+                let dst = Port { node: sub_node_id, index: inlet };
+                if let Some(src) = sub_graph.input_of(dst) {
+                    if matches!(&sub_graph.node(src.node).kind,
+                        opengen_ir::NodeKind::Input(_) | opengen_ir::NodeKind::Output(_)
+                    ) {
+                        continue;
+                    }
+                    if let (Some(&sn), Some(&dn)) =
+                        (node_map.get(&src.node), node_map.get(&dst.node))
+                    {
+                        graph.connect(
+                            Port { node: sn, index: src.index },
+                            Port { node: dn, index: inlet },
+                        );
+                    }
+                }
+            }
+        }
+
+        // ── Step 3: Wire positional args to Input nodes ────
+        for (i, &arg_port) in args.iter().enumerate() {
+            let in_idx = i as u16;
+            if let Some(&in_node) = sub_in_nodes.get(&in_idx) {
+                let in_out = Port { node: in_node, index: 0 };
+                // Find consumers of this input
+                let mut consumers = Vec::new();
+                for (dst_nid, _) in sub_graph.nodes() {
+                    for inlet in 0..16u16 {
+                        let dst = Port { node: dst_nid, index: inlet };
+                        if sub_graph.input_of(dst) == Some(in_out) {
+                            consumers.push(dst);
+                        }
+                    }
+                }
+                for consumer in &consumers {
+                    if let Some(&mapped) = node_map.get(&consumer.node) {
+                        graph.connect(
+                            arg_port,
+                            Port { node: mapped, index: consumer.index },
+                        );
+                    }
+                }
+            }
+        }
+
+        // ── Step 4: Collect output ports ────
+        // Build reverse map: Input node_id → inlet index
+        let mut in_rev: HashMap<NodeId, u16> = HashMap::new();
+        for (&idx, &nid) in &sub_in_nodes {
+            in_rev.insert(nid, idx);
+        }
+
+        let mut out_ports: Vec<(u16, Port)> = Vec::new();
+        for (&out_idx, &out_node) in &sub_out_nodes {
+            let output_inlet = Port { node: out_node, index: 0 };
+            let feeding = sub_graph.input_of(output_inlet);
+            match feeding {
+                Some(src) if node_map.contains_key(&src.node) => {
+                    if let Some(&mapped) = node_map.get(&src.node) {
+                        out_ports.push((
+                            out_idx,
+                            Port { node: mapped, index: src.index },
+                        ));
+                    }
+                }
+                Some(src) if in_rev.contains_key(&src.node) => {
+                    // Passthrough: output is fed by an Input node
+                    let inp_idx = in_rev[&src.node];
+                    if (inp_idx as usize) < args.len() {
+                        out_ports.push((out_idx, args[inp_idx as usize]));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Sort output ports by index and return
+        out_ports.sort_by_key(|(idx, _)| *idx);
+        let output_ports: Vec<Port> = out_ports.into_iter().map(|(_, p)| p).collect();
+
+        if output_ports.is_empty() {
+            Err(format!("abstraction '{}' has no outputs", name))
+        } else {
+            Ok(Some(output_ports))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
