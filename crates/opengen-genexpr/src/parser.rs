@@ -3,10 +3,10 @@
 //! Precedence ladder (low → high):
 //!   1.  Ternary `?:`                 (right-associative)
 //!   2.  `||`                         (logical or)
-//!   3.  `&&`                         (logical and)
-//!   4.  `|`                          (bitwise or)
-//!   5.  `^`                          (bitwise xor)
-//!   6.  `^^`                         (logical xor)
+//!   3.  `^^`                         (logical xor)
+//!   4.  `&&`                         (logical and)
+//!   5.  `|`                          (bitwise or)
+//!   6.  `^`                          (bitwise xor)
 //!   7.  `&`                          (bitwise and)
 //!   8.  `==` `!=`                    (equality)
 //!   9.  `<` `>` `<=` `>=`            (relational)
@@ -17,8 +17,10 @@
 //!  14.  postfix (call, member-call)  (suffix)
 //!  15.  primary
 //!
-//! Provenance: PEER = PEG facts from `reference/rnbo/genexpr_js/genexpr.pegjs`
-//! (Vendor — cite path; never quote) cross-checked with `docs/research/gen_docs/genexpr_ebnf.md`.
+//! Provenance: ladder per `reference/rnbo/genexpr_js/genexpr.pegjs` operator_precedence
+//! (Vendor; the M2 plan's task text mis-transcribed `^^`'s tier — corrected during execution;
+//! conformance cross-check tracked for M3 "bitwise ^^ semantics confirmation").
+//! Also cross-checked with `docs/research/gen_docs/genexpr_ebnf.md`.
 
 use crate::ast::*;
 use crate::lexer::{Lexer, Token};
@@ -655,11 +657,11 @@ impl Parser {
 
     /// Logical OR: ||
     fn parse_logical_or(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_logical_and()?;
+        let mut left = self.parse_xor_logical()?;
 
         while self.current == Token::OrOr {
             self.advance()?;
-            let right = self.parse_logical_and()?;
+            let right = self.parse_xor_logical()?;
             left = Expr::BinOp {
                 op: BinOpKind::LogicalOr,
                 left: Box::new(left),
@@ -687,13 +689,13 @@ impl Parser {
         Ok(left)
     }
 
-    /// Logical XOR: ^^  (between ^ and & in the precedence ladder)
+    /// Logical XOR: ^^  (between || and && per vendor PEG)
     fn parse_xor_logical(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_bitand()?;
+        let mut left = self.parse_logical_and()?;
 
         while self.current == Token::CaretCaret {
             self.advance()?;
-            let right = self.parse_bitand()?;
+            let right = self.parse_logical_and()?;
             left = Expr::BinOp {
                 op: BinOpKind::LogicalXor,
                 left: Box::new(left),
@@ -723,11 +725,11 @@ impl Parser {
 
     /// Bitwise XOR: ^
     fn parse_bitxor(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_xor_logical()?;
+        let mut left = self.parse_bitand()?;
 
         while self.current == Token::Caret {
             self.advance()?;
-            let right = self.parse_xor_logical()?;
+            let right = self.parse_bitand()?;
             left = Expr::BinOp {
                 op: BinOpKind::BitXor,
                 left: Box::new(left),
