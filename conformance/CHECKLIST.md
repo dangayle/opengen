@@ -40,37 +40,52 @@ Also report the patch bug to Cycling '74 (draft text in the research doc).
 - **Audio enabled** (DSP turned on — any output device works)
 - This repository checked out at the working directory
 
-## Steps
+## Steps (render kit v2 — rebuilt 2026-06-10)
+
+> The original kit was never exercised and could not work (no start trigger,
+> unwired node.script, and it relied on a gen~ `code` message that does not
+> exist). v2 is fully static: one `gen~ @gen <stem>.genexpr` per patch, one
+> `record~` + `buffer~` pair per output channel (17 total). `node.script`
+> only sizes buffers and writes WAVs. Regenerate the host after adding a
+> patch: `python3 tools/gen_render_host.py`.
+
+### 0. One-time: add the patches folder to Max's search path
+
+Max → Settings/Options → File Preferences → add this repository's
+`conformance/patches/` folder. The gen~ boxes load patches by bare filename
+(`@gen cycle_440.genexpr`) via the search path.
 
 ### 1. Open Render Host
 
-Open `conformance/render/render_host.maxpat` in Max 9.
+Open `conformance/render/render_host.maxpat` in Max 9 and check the Max
+console: **all 9 gen~ objects must compile with no errors**. If you see
+"can't find" errors, step 0 wasn't applied — fix and reopen.
 
-The patcher contains:
-- A `gen~` object (will load each conformance patch)
-- A `gain~` for level control
-- A `record~` object recording into a `buffer~`
-- A `node.script` object that runs `tools/render_runner.js`
+The `node.script` autostarts (`@autostart 1`); the console should show
+`render_runner: sized 17 buffers to 4096 samples`. If not, click the
+`script start` message box.
 
-### 2. Enable Audio
+### 2. Arm the recorders (DSP still OFF)
 
-Turn on DSP in Max (click the audio status in the toolbar, or press ⌘+.)
+Click the `arm` message box. Arming before DSP-on is what aligns capture to
+patch t = 0: every recorder starts at the first processed vector, exactly
+when gen~ state initializes.
 
-**Important:** gen~ will not compile patches without audio enabled.
+### 3. Record
 
-### 3. Trigger the Runner
+Turn DSP ON (ezdac~), wait about 1 second, turn DSP OFF. Each buffer is
+exactly 4096 samples; recorders stop automatically when full.
 
-Click the `start` message box or send a bang to the `node.script` object.
+### 4. Write the WAVs
 
-This runs `tools/render_runner.js`, which for each patch in
-`conformance/patches/`:
+Click the `writewavs` message box. The runner sends each `buffer~` a `write`
+message with the absolute path `conformance/golden/<stem>.ch<N>.wav` and
+logs each file to the console.
 
-1. Sends the genexpr `code` to the gen~ object
-2. Waits 100 ms for gen~ to compile
-3. Starts recording for ~135 ms (≈ 4096 samples at 48 kHz)
-4. Saves a mono WAV per output channel to `conformance/golden/<stem>.ch<N>.wav`
+To re-record, close and reopen the patch first (fresh gen~ state), then
+repeat from step 2.
 
-### 4. Verify Golden Files
+### 5. Verify Golden Files
 
 After the runner completes, verify that WAV files appear in
 `conformance/golden/`. Expected files (9 patches × N outputs):
@@ -91,11 +106,19 @@ After the runner completes, verify that WAV files appear in
 
 If some files are missing, check the Max window for error messages from
 the runner script. Common issues:
-- Audio not enabled → gen~ won't compile
+- Patches folder not in search path → gen~ boxes empty (step 0)
 - Node for Max not available → node.script won't start
 - File permissions → buffer~ write may fail
 
-### 5. Run Conformance Tests
+**Bit-depth check (first run):** the comparator's 1e-6 tolerance requires
+float32 WAVs. If `cargo test` fails with uniform ~1e-5 diffs, buffer~ wrote
+int16 — report back and we'll switch the write path to float32 explicitly.
+
+**Alignment check is automatic:** `history_counter.ch1` must read 0,1,2,…
+and `cycle`/`phasor` must start at exactly 0. If capture missed patch t=0,
+the comparator fails on sample 0 — close/reopen the patch and re-record.
+
+### 6. Run Conformance Tests
 
 With goldens in place, run the conformance test suite:
 
@@ -108,14 +131,14 @@ Expected output: all tests PASS.
 If a test fails, check per-patch tolerances in
 `crates/opengen-analysis/tests/conformance.rs`.
 
-### 6. Commit Goldens
+### 7. Commit Goldens
 
 ```sh
 git add conformance/golden/
 git commit -m "chore(conformance): add Max-rendered golden WAVs"
 ```
 
-### 7. Upgrade `# Observed` to `# Observed` (resolved)
+### 8. Upgrade `# Observed` to `# Observed` (resolved)
 
 After goldens are committed, the following operators' rustdoc can be updated
 from `# Observed`-pending to `# Observed` (confirmed):

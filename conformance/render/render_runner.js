@@ -1,181 +1,97 @@
 #!/usr/bin/env node
 /**
- * render_runner.js — Drives gen~ conformance rendering in Max 9.
+ * render_runner.js — orchestrates gen~ conformance golden rendering (v2).
  *
- * Loads each conformance patch into gen~, records 4096 samples, and writes
- * golden WAV files to conformance/golden/<stem>.ch<N>.wav.
+ * Runs inside Max via `node.script` in render_host.maxpat (regenerate the
+ * host with tools/gen_render_host.py). The host is fully static: one gen~
+ * per conformance patch (loaded via @gen), one record~ + buffer~ pair per
+ * output channel. This script only:
  *
- * Intended to run via Max's `node.script` object inside render_host.maxpat.
- * The maxpat must have:
- *   - gen~ object with varname "genpatcher" (receives @gen file / code messages)
- *   - record~ object with varname "recorder" (records into buffer~ "capture")
- *   - buffer~ named "capture" (size 4096, 1 channel)
+ *   1. On start: sizes every capture buffer to exactly 4096 samples
+ *      (`sizeinsamps` — buffer~ args are in ms, which cannot hit an exact
+ *      sample count).
+ *   2. "arm" / "disarm": broadcasts 1/0 to every record~ (arm with DSP OFF
+ *      so recording starts at the first processed vector = patch t=0).
+ *   3. "writewavs": sends each buffer~ a `write` message with the absolute
+ *      path conformance/golden/<stem>.ch<N>.wav.
  *
- * Usage in Max:
- *   1. Open render_host.maxpat in Max 9
- *   2. Turn on audio (DSP)
- *   3. Click the message or send "start" to node.script
+ * Message protocol out of node.script outlet 0 (dispatched in the patch):
+ *   ("rec", 1|0)                          -> [route rec buf] outlet 0 -> all record~
+ *   ("buf", <name>, "sizeinsamps", 4096)  -> outlet 1 -> [route <names>] -> buffer~
+ *   ("buf", <name>, "write", <abspath>)   -> same path
  *
- * The script will iterate each .genexpr patch in conformance/patches/,
- * render 4096 samples, and save WAV(s) to conformance/golden/.
- *
- * Dependencies: none beyond Max's built-in Node for Max runtime.
+ * No runtime code injection: vanilla gen~ has no `code` message (verified
+ * against the gen~ help/reference, 2026-06-10).
  */
 
 "use strict";
 
-const fs = require("fs");
 const path = require("path");
-const Max = require("Max");
+const fs = require("fs");
+const Max = require("max-api");
 
-// ─── Configuration ────────────────────────────────────────────────────────────
-
-// Resolve paths relative to the render_runner.js location
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const PATCHES_DIR = path.join(REPO_ROOT, "conformance", "patches");
 const GOLDEN_DIR = path.join(REPO_ROOT, "conformance", "golden");
-const BUFFER_NAME = "capture";
 const NUM_SAMPLES = 4096;
-const SR = 48000;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// stem -> channel count. Keep in sync with conformance/patches/ and
+// tools/gen_render_host.py.
+const PATCHES = {
+  cycle_440: 1,
+  dcblock_step: 1,
+  delay_echo: 3,
+  history_counter: 2,
+  phasor_incr_order: 1,
+  range_inverted_bounds: 3,
+  sah_latch: 2,
+  slide_step: 1,
+  triangle_duty: 3,
+};
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
- * Get the maximum number of outputs for a gen~ patch by scanning for "outN"
- * identifiers. Falls back to 1 (the minimum: a patch must have at least out1).
- */
-function countOutputs(code) {
-  const regex = /out(\d+)\s*=/g;
-  let max = 0;
-  let match;
-  while ((match = regex.exec(code)) !== null) {
-    const n = parseInt(match[1], 10);
-    if (n > max) max = n;
+function bufferNames() {
+  const names = [];
+  for (const [stem, nCh] of Object.entries(PATCHES)) {
+    for (let ch = 0; ch < nCh; ch++) names.push(`${stem}_ch${ch}`);
   }
-  return Math.max(max, 1);
+  return names;
 }
 
-/**
- * Load a genexpr patch into gen~ by sending its content as a `code` message.
- * Uses Max's patcher scripting: Max.outlet() to send to the gen~ object.
- */
-async function loadPatch(stem, code) {
-  return new Promise((resolve, reject) => {
-    try {
-      // Send the genexpr code directly to the gen~ patcher.
-      Max.outlet("genpatcher", "code", code);
-      // Give gen~ time to compile (typically < 10 ms for simple patches)
-      setTimeout(resolve, 100);
-    } catch (e) {
-      reject(e);
-    }
-  });
+function wavPathFor(bufName) {
+  // <stem>_ch<N>  ->  <stem>.ch<N>.wav
+  const m = bufName.match(/^(.*)_ch(\d+)$/);
+  return path.join(GOLDEN_DIR, `${m[1]}.ch${m[2]}.wav`);
 }
 
-/**
- * Start recording into the buffer by sending a 1 (start) to record~.
- */
-async function startRecording() {
-  return new Promise((resolve) => {
-    Max.outlet("recorder", 1);
-    setTimeout(resolve, 10);
-  });
-}
-
-/**
- * Stop recording by sending a 0 (stop) to record~.
- */
-async function stopRecording() {
-  return new Promise((resolve) => {
-    Max.outlet("recorder", 0);
-    setTimeout(resolve, 10);
-  });
-}
-
-/**
- * Save the buffer content to a mono WAV file by sending a `write` message.
- * Format: "write <filepath>"
- */
-async function writeBuffer(filePath) {
-  return new Promise((resolve, reject) => {
-    try {
-      Max.outlet(BUFFER_NAME, "write", filePath);
-      setTimeout(resolve, 50);
-    } catch (e) {
-      reject(e);
-    }
-  });
-}
-
-/**
- * Render a single patch: load, record N samples, save all output channels.
- * Each channel gets its own mono WAV file: <stem>.ch<N>.wav
- */
-async function renderPatch(filePath) {
-  const stem = path.basename(filePath, ".genexpr");
-  const code = fs.readFileSync(filePath, "utf-8");
-  const nOutputs = countOutputs(code);
-
-  console.log(`  Rendering ${stem} (${nOutputs} output(s)) ...`);
-
-  // Load the patch
-  await loadPatch(stem, code);
-
-  // Record
-  await startRecording();
-  const renderMs = Math.ceil((NUM_SAMPLES / SR) * 1000) + 50;
-  await sleep(renderMs);
-  await stopRecording();
-
-  // Save each output channel
-  for (let ch = 0; ch < nOutputs; ch++) {
-    const wavPath = path.join(GOLDEN_DIR, `${stem}.ch${ch}.wav`);
-    await writeBuffer(wavPath);
-    console.log(`    → ${wavPath}`);
+async function sizeBuffers() {
+  for (const name of bufferNames()) {
+    await Max.outlet("buf", name, "sizeinsamps", NUM_SAMPLES);
   }
+  Max.post(`render_runner: sized ${bufferNames().length} buffers to ${NUM_SAMPLES} samples`);
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
-
-async function main() {
-  console.log("=== GenExpr Conformance Render Runner ===");
-  console.log(`Patches:  ${PATCHES_DIR}`);
-  console.log(`Goldens:  ${GOLDEN_DIR}`);
-  console.log(`Samples:  ${NUM_SAMPLES} @ ${SR} Hz`);
-  console.log("");
-
-  // Ensure golden directory exists
-  if (!fs.existsSync(GOLDEN_DIR)) {
-    fs.mkdirSync(GOLDEN_DIR, { recursive: true });
-  }
-
-  // Collect patches
-  const patches = fs.readdirSync(PATCHES_DIR)
-    .filter(f => f.endsWith(".genexpr"))
-    .sort();
-
-  if (patches.length === 0) {
-    console.log("WARN: No .genexpr patches found.");
-    return;
-  }
-
-  console.log(`Found ${patches.length} patches\n`);
-
-  for (const f of patches) {
-    try {
-      await renderPatch(path.join(PATCHES_DIR, f));
-    } catch (e) {
-      console.error(`  ERROR rendering ${f}: ${e.message || e}`);
-    }
-  }
-
-  console.log("\nDone.");
-}
-
-main().catch(e => {
-  console.error("Fatal:", e);
+Max.addHandler("arm", async () => {
+  await Max.outlet("rec", 1);
+  Max.post("render_runner: ARMED. Now turn DSP ON for ~1s, then OFF, then click [writewavs].");
 });
+
+Max.addHandler("disarm", async () => {
+  await Max.outlet("rec", 0);
+  Max.post("render_runner: disarmed.");
+});
+
+Max.addHandler("writewavs", async () => {
+  if (!fs.existsSync(GOLDEN_DIR)) fs.mkdirSync(GOLDEN_DIR, { recursive: true });
+  for (const name of bufferNames()) {
+    const p = wavPathFor(name);
+    await Max.outlet("buf", name, "write", p);
+    Max.post(`render_runner: write ${p}`);
+  }
+  Max.post("render_runner: done. Verify with: cargo test -p opengen-analysis --test conformance");
+});
+
+(async () => {
+  Max.post("=== GenExpr Conformance Render Runner v2 ===");
+  Max.post(`goldens -> ${GOLDEN_DIR}`);
+  await sizeBuffers();
+  Max.post("render_runner: ready. Steps: [arm] (DSP off) -> DSP ON 1s -> DSP OFF -> [writewavs]");
+})();
