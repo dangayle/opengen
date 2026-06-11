@@ -1350,7 +1350,9 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     }
                 })?;
 
-                if args.len() != op_def.arity as usize {
+                let mut adjusted_args = args.to_vec();
+                Self::adjust_round_arity(name, &mut adjusted_args);
+                if adjusted_args.len() != op_def.arity as usize {
                     return Err(LowerError {
                         msg: format!(
                             "function '{}' expects {} arguments, got {}",
@@ -1416,7 +1418,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     u32::MAX
                 };
 
-                let lower_args: Result<Vec<proc::PExpr>, LowerError> = args
+                let lower_args: Result<Vec<proc::PExpr>, LowerError> = adjusted_args
                     .iter()
                     .map(|a| self.lower_region_expr(a, meta, input_port_of))
                     .collect();
@@ -1927,6 +1929,16 @@ impl<'a, 'b> Lowerer<'a, 'b> {
         Err(no_resolver_err())
     }
 
+    /// Adjust 1-arg round(x) to round(x, 1.0) per gen~ default (base=1).
+    ///
+    /// # Documented
+    /// `docs/research/gen_docs/genexpr_language_reference.md` shows `round(x, base=1)`.
+    fn adjust_round_arity(name: &str, args: &mut Vec<Expr>) {
+        if name == "round" && args.len() == 1 {
+            args.push(Expr::Number(1.0));
+        }
+    }
+
     fn lower_expr(&mut self, expr: &Expr) -> Result<Port, LowerError> {
         match expr {
             Expr::Number(n) => {
@@ -2074,7 +2086,9 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                             loc: None,
                         });
                     }
-                    if args.len() != op_def.arity as usize {
+                    let mut adjusted_args = args.to_vec();
+                    Self::adjust_round_arity(name, &mut adjusted_args);
+                    if adjusted_args.len() != op_def.arity as usize {
                         return Err(LowerError {
                             msg: format!(
                                 "function '{}' expects {} arguments, got {}",
@@ -2086,7 +2100,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
 
                     let op_node = self.graph.add_node(Node::op(name, vec![], op_def.state));
 
-                    for (i, arg) in args.iter().enumerate() {
+                    for (i, arg) in adjusted_args.iter().enumerate() {
                         let arg_port = self.lower_expr(arg)?;
                         self.graph.connect(arg_port, Port { node: op_node, index: i as u16 });
                     }
@@ -2521,5 +2535,16 @@ mod tests {
         use opengen_testkit::render;
         let out = render("PI = 2; out1 = PI;", 48000.0, 1);
         assert_eq!(out.ch(0)[0], 2.0);
+    }
+
+    #[test]
+    fn round_one_arg_defaults_to_nearest_int() {
+        use opengen_testkit::render;
+        // gen~ round(x) defaults to base=1 (nearest integer).
+        // ref: docs/research/gen_docs/genexpr_language_reference.md — `round(x, base=1)`
+        let out = render("out1 = round(2.5);", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], 3.0);
+        let out = render("out1 = round(-2.5);", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], -3.0);
     }
 }
