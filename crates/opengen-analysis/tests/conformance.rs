@@ -174,3 +174,11 @@ fn conformance_slide_step() {
 fn conformance_triangle_duty() {
     run_single_patch("triangle_duty", include_str!("../../../conformance/patches/triangle_duty.genexpr"));
 }
+
+#[test]
+fn conformance_dcblock_impulse() {
+    // Disambiguation probe for dcblock's first-sample init (lazy x1-init vs
+    // constant-folding) — SKIPs until the next Max render session produces
+    // its golden. See the patch header and conformance/CHECKLIST.md.
+    run_single_patch("dcblock_impulse", include_str!("../../../conformance/patches/dcblock_impulse.genexpr"));
+}

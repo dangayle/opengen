@@ -6,18 +6,28 @@ use opengen_ir::StateDecl;
 ///
 /// # Definition
 /// Returns lo if x < lo, hi if x > hi, otherwise x.
-/// Implemented as `min(max(x, lo), hi)` — does NOT swap inverted bounds.
-/// Inverted bounds (lo > hi) pin to hi. Boundary behavior: inclusive on both ends. IEEE-754 f64.
+/// Implemented as `max(min(x, hi), lo)` — does NOT swap inverted bounds.
+/// Inverted bounds (lo > hi) pin to **lo** (the lo bound is applied last).
+/// Boundary behavior: inclusive on both ends. IEEE-754 f64.
+/// NaN input: Rust's NaN-ignoring min/max make `clip(NaN, lo, hi) = hi`
+/// under this composition — which coincides with genlib's comparison-chain
+/// result. In-Max gen~ NaN behavior is unverified (conformance backlog).
+///
+/// # Observed
+/// M2 conformance harness (2026-06-11): real gen~ gives `clip(0.5, 1, 0) = 1.0`
+/// — the lo bound wins under inverted bounds (golden:
+/// `conformance/golden/range_inverted_bounds.ch0.wav`, patch
+/// `conformance/patches/range_inverted_bounds.genexpr`).
+///
+/// # Divergence
+/// `reference/genlib/gen_dsp/genlib_ops.h` clamp = `minimum(maximum(x, lo), hi)`
+/// — the opposite composition order, which would pin inverted bounds to hi
+/// (0.0 for the case above). The genlib code-export runtime demonstrably
+/// differs from gen~ inside Max here; we match in-Max gen~ (the conformance
+/// reference). For normal bounds (lo <= hi) the two orders agree everywhere.
 ///
 /// # Documented
 /// `reference/gen/refpages/common/gen_common_clip.maxref.xml`
-///
-/// # Vendor
-/// `reference/genlib/gen_dsp/genlib_ops.h`: clamp = `minimum(maximum(x, minVal), maxVal)`
-///
-/// # Observed
-/// Authored conformance patch `conformance/patches/range_inverted_bounds.genexpr` (Task 25)
-/// cross-checks against real gen~ renders.
 ///
 /// ```
 /// use opengen_testkit::render;
@@ -28,12 +38,15 @@ use opengen_ir::StateDecl;
 /// // Boundary: exactly at high edge
 /// let out3 = render("out1 = clip(1.0, 0.0, 1.0);", 48000.0, 1);
 /// assert_eq!(out3.ch(0)[0], 1.0);
+/// // Inverted bounds pin to lo (gen~ observed)
+/// let out4 = render("out1 = clip(0.5, 1.0, 0.0);", 48000.0, 1);
+/// assert_eq!(out4.ch(0)[0], 1.0);
 /// ```
 pub fn clip(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
     let x = inputs[0];
     let lo = inputs[1];
     let hi = inputs[2];
-    x.max(lo).min(hi)
+    x.min(hi).max(lo)
 }
 
 /// Wrap a value to a range: `out = wrap(x, lo, hi)`.
@@ -218,9 +231,11 @@ mod tests {
     #[test]
     fn clip_does_not_swap_inverted_bounds() {
         use opengen_testkit::render;
-        // D4 / genlib: clip is literally min(max(x, lo), hi) — inverted bounds pin to hi.
-        assert_eq!(render("out1 = clip(0.5, 1, 0);", 48_000.0, 1).ch(0)[0], 0.0);
-        assert_eq!(render("out1 = clip(-3.0, 1, 0);", 48_000.0, 1).ch(0)[0], 0.0);
+        // # Observed (gen~ in Max, 2026-06-11): clip = max(min(x, hi), lo) —
+        // inverted bounds pin to LO (genlib's clamp has the opposite order;
+        // in-Max gen~ wins for conformance).
+        assert_eq!(render("out1 = clip(0.5, 1, 0);", 48_000.0, 1).ch(0)[0], 1.0);
+        assert_eq!(render("out1 = clip(-3.0, 1, 0);", 48_000.0, 1).ch(0)[0], 1.0);
         assert_eq!(render("out1 = clip(0.5, 0.25, 0.25);", 48_000.0, 1).ch(0)[0], 0.25);
         // Regression: normal order unchanged
         assert_eq!(render("out1 = clip(0.5, 0, 1);", 48_000.0, 1).ch(0)[0], 0.5);

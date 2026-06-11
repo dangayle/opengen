@@ -100,16 +100,24 @@ pub fn impulse_response(src: &str, sr: f64, n: usize) -> Vec<f64> {
     let graph = opengen_genexpr::parse_and_lower(src).expect("parse");
     let mut patch = opengen_compile::compile(&graph, &opengen_ops::Registry::core(), sr)
         .expect("compile");
-    
+
+    // One zero warm-up sample (output discarded) before the impulse: a zero
+    // input through zero state is a no-op for any LTI patch, but it lets
+    // first-sample initialization behavior settle (e.g. gen~'s dcblock
+    // initializes its input history to the FIRST input sample — an impulse
+    // at t=0 would be absorbed by that init and corrupt the measurement).
+    // result[k] remains the response at lag k after the impulse.
+    let _ = patch.process(&[0.0]);
+
     let mut result = Vec::with_capacity(n);
     for i in 0..n {
-        // Feed impulse: 1.0 at first sample, 0.0 thereafter
+        // Feed impulse: 1.0 at first post-warm-up sample, 0.0 thereafter
         let input = if i == 0 { 1.0 } else { 0.0 };
         let frame = patch.process(&[input]);
         // Use channel 0 of output as the impulse response
         result.push(frame.get(0).copied().unwrap_or(0.0));
     }
-    
+
     result
 }
 

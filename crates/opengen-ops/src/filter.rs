@@ -14,33 +14,50 @@ use opengen_ir::StateDecl;
 /// y[n] = x[n] - x[n-1] + y[n-1] * 0.9997
 /// ```
 ///
-/// where `x[n-1]` and `y[n-1]` are kernel-managed state slots. Initially both are 0.0.
+/// where `x[n-1]` and `y[n-1]` are kernel-managed state slots. The input
+/// history `x[n-1]` initializes to the FIRST input sample (so `y[0] = 0`
+/// always — no startup step); `y[n-1]` initializes to 0. Slots(3): x1, y1,
+/// first-sample flag.
+///
+/// # Observed
+/// M2 conformance harness (2026-06-11): real gen~ outputs EXACT silence for
+/// a constant input present from sample 0 (golden:
+/// `conformance/golden/dcblock_step.ch0.wav`, patch
+/// `conformance/patches/dcblock_step.genexpr`) — i.e. the input history
+/// starts equal to the first input rather than 0. A follow-up probe
+/// (dcblock driven by a t=0 impulse) is queued in `conformance/CHECKLIST.md`
+/// to distinguish lazy x1-init from compiler constant-folding.
+///
+/// # Divergence
+/// `reference/genlib/gen_dsp/genlib_ops.h` (struct DCBlock) resets x1 = 0,
+/// which would output 1.0 at sample 0 for a unit step — the genlib code
+/// EXPORT runtime demonstrably differs from gen~ inside Max here. We match
+/// in-Max gen~ (the conformance reference).
 ///
 /// # Documented
 /// `reference/gen/refpages/dsp/gen_dsp_dcblock.maxref.xml`
 ///
-/// Equivalent GenExpr from the refpage:
-/// ```text
-/// History x1, y1;
-/// y = in1 - x1 + y1*0.9997;
-/// x1 = in1;
-/// y1 = y;
-/// out1 = y;
-/// ```
-///
 /// ```
 /// use opengen_testkit::render_with_inputs;
-/// let dc: Vec<f64> = vec![1.0; 10000];
+/// // Constant (pure DC) input from sample 0 → exact silence (gen~ observed)
+/// let dc: Vec<f64> = vec![1.0; 64];
 /// let out = render_with_inputs("out1 = dcblock(in1);", 48000.0, &[&dc]);
-/// // First sample: no previous input or output → passes through
-/// assert_eq!(out.ch(0)[0], 1.0);
-/// // After many samples, DC has been substantially blocked
-/// assert!(out.ch(0)[9999] < 0.05,
-///     "dcblock should attenuate DC to below 0.05 after 10000 samples, got {}",
-///     out.ch(0)[9999]);
+/// assert!(out.ch(0).iter().all(|&v| v == 0.0));
+///
+/// // A step AFTER sample 0 produces the classic highpass response
+/// let step: Vec<f64> = [0.0, 0.0, 1.0, 1.0, 1.0].to_vec();
+/// let out2 = render_with_inputs("out1 = dcblock(in1);", 48000.0, &[&step]);
+/// assert_eq!(out2.ch(0)[2], 1.0);               // edge passes through
+/// assert_eq!(out2.ch(0)[3], 0.9997);            // then decays
 /// ```
 pub fn dcblock(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     let x = inputs[0];
+    if state[2] == 0.0 {
+        // First sample: input history starts at the first input (gen~
+        // observed — see # Observed above). y[0] is therefore always 0.
+        state[2] = 1.0;
+        state[0] = x;
+    }
     let x1 = state[0]; // previous input
     let y1 = state[1]; // previous output
     let y = x - x1 + y1 * 0.9997;
@@ -102,7 +119,7 @@ pub fn defs() -> Vec<OpDef> {
         OpDef {
             name: "dcblock",
             arity: 1,
-            state: StateDecl::Slots(2),
+            state: StateDecl::Slots(3),
             deferred_ports: &[],
             update: None,
             init: None,
@@ -134,22 +151,25 @@ mod tests {
 
     #[test]
     fn dcblock_blocks_dc_over_time() {
+        // Constant DC from sample 0: lazy x1-init absorbs it — EXACT silence
+        // (gen~ observed; golden conformance/golden/dcblock_step.ch0.wav).
         let dc: Vec<f64> = vec![1.0; 10000];
         let out = render_with_inputs_n("out1 = dcblock(in1);", 48000.0, &[&dc], 10000);
-        assert_eq!(out.ch(0)[0], 1.0);
-        assert!(out.ch(0)[9999] < 0.05,
-            "dcblock should attenuate DC: got {} at sample 9999", out.ch(0)[9999]);
+        assert!(out.ch(0).iter().all(|&v| v == 0.0),
+            "dcblock of constant input should be exactly silent");
     }
 
     #[test]
     fn dcblock_impulse_response_decays_to_zero() {
-        // Impulse at sample 0, zeros thereafter.
-        // The highpass transient dips negative then decays toward zero.
+        // Impulse at sample 0, zeros thereafter. With gen~'s lazy x1-init,
+        // y[0] = 0 (x1 starts at the impulse value); the falling edge at
+        // sample 1 produces -1, then the magnitude decays toward zero.
         let impulse: Vec<f64> = vec![1.0];
         let out = render_with_inputs_n("out1 = dcblock(in1);", 48000.0, &[&impulse], 1000);
-        assert_eq!(out.ch(0)[0], 1.0);
-        // Magnitude decays monotonically after initial negative dip (sample 1-2)
-        for i in 3..out.ch(0).len() {
+        assert_eq!(out.ch(0)[0], 0.0);
+        assert_eq!(out.ch(0)[1], -1.0);
+        // Magnitude decays monotonically after the edge
+        for i in 2..out.ch(0).len() {
             assert!(out.ch(0)[i].abs() <= out.ch(0)[i-1].abs() + 1e-15,
                 "magnitude decay failed at {}: {} → {}",
                 i, out.ch(0)[i-1], out.ch(0)[i]);

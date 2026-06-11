@@ -6,85 +6,89 @@ use opengen_ir::StateDecl;
 /// Ramp oscillator. Outputs a sawtooth wave 0..1 at the given frequency.
 ///
 /// # Definition
-/// `y[n] = wrap(y[n-1] + freq/sr, 0, 1)`, `y[0] = 0.0`. StateDecl::Slots(1), arity 1.
-///
-/// The kernel outputs the pre-increment phase value, ensuring `y[0] == 0.0` exactly:
-/// `out = state; state = wrap(state + freq/sr, 0, 1)`.
-///
-/// # Vendor
-/// `reference/rnbo/operators/phasor.js`
-///
-/// RNBO's implementation emits the pre-increment value and applies wrapping before
-/// the increment step (via conditional bounds checks).
+/// Increment-then-output: `phase = wrap(phase + freq/sr, 0, 1); y[n] = phase`,
+/// with phase state starting at 0. For constant freq: `y[n] = wrap((n+1)·freq/sr, 0, 1)`
+/// — the FIRST output is `freq/sr`, not 0. StateDecl::Slots(1), arity 1.
 ///
 /// # Observed
-/// This is an open conformance question vs real gen~, to be verified by the M2
-/// conformance harness (open item).
+/// Settled by the M2 conformance harness (2026-06-11): real gen~'s first
+/// output sample is `freq/sr` (golden: `conformance/golden/phasor_incr_order.ch0.wav`,
+/// patch: `conformance/patches/phasor_incr_order.genexpr`).
+///
+/// # Vendor
+/// `reference/genlib/gen_dsp/genlib_ops.h` (struct Phasor): wraps the
+/// incremented phase and returns it — increment-then-output, matching the
+/// observation. (`reference/rnbo/operators/phasor.js` emits the pre-increment
+/// value instead; RNBO diverges from gen~ here — gen~ conformance wins.)
 ///
 /// ```
 /// use opengen_testkit::render;
-/// // Exact ramp at 1000 Hz / 48000 sr: samples are 0, 1000/48000, 2000/48000...
+/// // Exact ramp at 1000 Hz / 48000 sr: first sample is freq/sr (increment-then-output)
 /// let out = render("out1 = phasor(1000);", 48000.0, 3);
-/// assert_eq!(out.ch(0), &[0.0, 1000.0/48000.0, 2000.0/48000.0]);
+/// assert_eq!(out.ch(0), &[1000.0/48000.0, 2000.0/48000.0, 3000.0/48000.0]);
 /// ```
 pub fn phasor(inputs: &[f64], state: &mut [f64], sr: f64) -> f64 {
     let freq = inputs[0];
-    let phase = state[0];
-    
-    // Output the current phase (pre-increment)
-    let output = phase;
-    
-    // Advance phase with wrapping
-    let mut next_phase = phase + freq / sr;
-    
+
+    // Increment-then-output (gen~ semantics, # Observed + genlib Phasor)
+    let mut next_phase = state[0] + freq / sr;
+
     // Wrap to [0, 1) for ANY finite increment (handles |freq/sr| >= 1.0)
-    // x - floor(x) maps any value to [0, 1); for in-range values floor(x)==0.0
-    // so this is exact and doesn't perturb the existing doctest expectations.
+    // x - floor(x) maps any value to [0, 1); for in-range values floor(x)==0.0.
     next_phase -= next_phase.floor();
-    
+
     // Guard: floating-point edge case where result could be exactly 1.0
     // (e.g., tiny negative values like -1e-17 → -1e-17 + 1.0 may round to 1.0)
     if next_phase >= 1.0 {
         next_phase = 0.0;
     }
-    
+
     state[0] = next_phase;
-    output
+    next_phase
 }
 
-/// Sine oscillator. Outputs a sine wave at the given frequency using f64::sin.
+/// Cosine-phase oscillator (gen~ `cycle`). Outputs `cos(2π·phase)`.
 ///
 /// # Definition
-/// `sin(2π · phase)` where phase advances like phasor. Slots(1), arity 1.
+/// Lookup-then-increment: `y[n] = cos(2π·phase); phase = wrap(phase + freq/sr, 0, 1)`,
+/// phase starting at 0 — so `y[0] = cos(0) = 1.0`. For constant freq:
+/// `y[n] = cos(2π·n·freq/sr)`. Slots(1), arity 1.
 ///
-/// The phase state advances exactly as in phasor: `phase[n] = wrap(phase[n-1] + freq/sr, 0, 1)`.
+/// # Observed
+/// Settled by the M2 conformance harness (2026-06-11): real gen~'s first
+/// output is exactly 1.0 — COSINE phase, read-then-increment (golden:
+/// `conformance/golden/cycle_440.ch0.wav`).
+///
+/// # Vendor
+/// `reference/genlib/gen_dsp/genlib_ops.h`: `SineData` fills a 2^14-entry
+/// table with `cos(i·2π/N)`; `SineCycle::operator()` does the interpolated
+/// table read FIRST, then advances its uint32 phase accumulator.
 ///
 /// # Divergence
-/// gen~ uses an interpolated wavetable for cycle; we use `f64::sin` directly.
-/// Rationale: exactness and determinism. Conformance tolerance will be handled
-/// by the M2 harness.
+/// gen~ uses the 14-bit interpolated cosine table (linear-interp error
+/// ≈ 5e-9, −156 dB); we compute `f64::cos` directly. Rationale: exactness
+/// and determinism; well inside every conformance tolerance.
 ///
 /// # Documented
 /// `reference/gen/refpages/dsp/gen_dsp_cycle.maxref.xml`
 ///
 /// ```
 /// use opengen_testkit::render;
-/// // First sample is exactly 0.0 (phase = 0 → sin(0) = 0)
+/// // First sample is exactly 1.0 (phase = 0 → cos(0) = 1)
 /// let out = render("out1 = cycle(1000);", 48000.0, 1);
-/// assert_eq!(out.ch(0)[0], 0.0);
+/// assert_eq!(out.ch(0)[0], 1.0);
 ///
-/// // Quarter period at freq=12000, sr=48000: quarter period = sr/(4*freq) = 1 sample
-/// // At sample 1, phase = 12000/48000 = 0.25 → sin(2π * 0.25) = sin(π/2) = 1.0
-/// let out2 = render("out1 = cycle(12000);", 48000.0, 2);
-/// let val = out2.ch(0)[1];
-/// assert!((val - 1.0).abs() <= f64::EPSILON, "Expected ~1.0, got {}", val);
+/// // Half period at freq=12000, sr=48000: at sample 2, phase = 0.5 → cos(π) = -1
+/// let out2 = render("out1 = cycle(12000);", 48000.0, 3);
+/// let val = out2.ch(0)[2];
+/// assert!((val + 1.0).abs() <= f64::EPSILON, "Expected ~-1.0, got {}", val);
 /// ```
 pub fn cycle(inputs: &[f64], state: &mut [f64], sr: f64) -> f64 {
     let freq = inputs[0];
     let phase = state[0];
-    
-    // Compute sine output
-    let output = (2.0 * std::f64::consts::PI * phase).sin();
+
+    // Cosine read at the CURRENT phase (lookup-then-increment, gen~ semantics)
+    let output = (2.0 * std::f64::consts::PI * phase).cos();
     
     // Advance phase with wrapping (same as phasor)
     let mut next_phase = phase + freq / sr;
@@ -230,24 +234,26 @@ mod tests {
 
     #[test]
     fn phasor_exact_ramp() {
-        // Exact equality test: 1000 Hz at 48000 sr
+        // Exact equality test: 1000 Hz at 48000 sr.
+        // Increment-then-output (gen~ conformance): first sample is freq/sr.
         let out = render("out1 = phasor(1000);", 48000.0, 3);
-        assert_eq!(out.ch(0), &[0.0, 1000.0/48000.0, 2000.0/48000.0]);
+        assert_eq!(out.ch(0), &[1000.0/48000.0, 2000.0/48000.0, 3000.0/48000.0]);
     }
 
     #[test]
-    fn cycle_first_sample_zero() {
+    fn cycle_first_sample_one() {
+        // Cosine phase (gen~ conformance): cos(0) = 1 at the first sample.
         let out = render("out1 = cycle(440);", 48000.0, 1);
-        assert_eq!(out.ch(0)[0], 0.0);
+        assert_eq!(out.ch(0)[0], 1.0);
     }
 
     #[test]
-    fn cycle_quarter_period_near_one() {
-        // At sr=48000, freq=12000 → period = 4 samples
-        // Quarter period at sample 1: phase = 0.25 → sin(π/2) ≈ 1.0
-        let out = render("out1 = cycle(12000);", 48000.0, 2);
-        let val = out.ch(0)[1];
-        assert!((val - 1.0).abs() <= f64::EPSILON, "Expected ~1.0, got {}", val);
+    fn cycle_half_period_near_minus_one() {
+        // At sr=48000, freq=12000 → period = 4 samples.
+        // Half period at sample 2: phase = 0.5 → cos(π) ≈ -1.0
+        let out = render("out1 = cycle(12000);", 48000.0, 3);
+        let val = out.ch(0)[2];
+        assert!((val + 1.0).abs() <= f64::EPSILON, "Expected ~-1.0, got {}", val);
     }
 
     #[test]
@@ -269,38 +275,40 @@ mod tests {
 
     #[test]
     fn phasor_high_freq_wrap() {
-        // Test freq/sr = 2.5: freq=120000, sr=48000
-        // Expected: y[0]=0.0, y[1]=wrap(2.5)=0.5, y[2]=wrap(0.5+2.5)=wrap(3.0)=0.0
+        // Test freq/sr = 2.5: freq=120000, sr=48000.
+        // Increment-then-output: y[0]=wrap(2.5)=0.5, y[1]=wrap(3.0)=0.0, y[2]=0.5
         let out = render("out1 = phasor(120000);", 48000.0, 3);
         let samples = out.ch(0);
-        
+
         // All samples must be in [0, 1)
         for (i, &val) in samples.iter().enumerate() {
             assert!(val >= 0.0 && val < 1.0, "Sample {} out of range [0,1): {}", i, val);
         }
-        
+
         // Check exact values
-        assert_eq!(samples[0], 0.0);
-        assert_eq!(samples[1], 0.5);
-        assert_eq!(samples[2], 0.0);
+        assert_eq!(samples[0], 0.5);
+        assert_eq!(samples[1], 0.0);
+        assert_eq!(samples[2], 0.5);
     }
 
     #[test]
     fn phasor_negative_freq_wrap() {
-        // Test negative freq/sr = -1.25: freq=-60000, sr=48000
-        // With port-level cycle breaking, phasor sees -60000 from sample 0 (no stale freq artifact)
+        // Test negative freq/sr = -1.25: freq=-60000, sr=48000.
+        // With port-level cycle breaking, phasor sees -60000 from sample 0
+        // (no stale freq artifact). Increment-then-output: first sample is
+        // already one wrapped increment in.
         let out = render("out1 = phasor(0 - 60000);", 48000.0, 4);
         let samples = out.ch(0);
-        
+
         // All samples must be in [0, 1)
         for (i, &val) in samples.iter().enumerate() {
             assert!(val >= 0.0 && val < 1.0, "Sample {} out of range [0,1): {}", i, val);
         }
-        
-        // Check exact values: phase starts at 0, each sample wraps -1.25 increment
-        assert_eq!(samples[0], 0.0);  // phase=0 at start
-        assert_eq!(samples[1], 0.75); // phase=0.75 after wrapping -1.25
-        assert_eq!(samples[2], 0.5);  // phase=0.5 after wrapping -0.5
-        assert_eq!(samples[3], 0.25); // phase=0.25 after wrapping 0.25
+
+        // Check exact values: each sample wraps a -1.25 increment
+        assert_eq!(samples[0], 0.75); // wrap(0 - 1.25)
+        assert_eq!(samples[1], 0.5);  // wrap(0.75 - 1.25)
+        assert_eq!(samples[2], 0.25); // wrap(0.5 - 1.25)
+        assert_eq!(samples[3], 0.0);  // wrap(0.25 - 1.25)
     }
 }

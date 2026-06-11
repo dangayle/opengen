@@ -175,7 +175,8 @@ fn stateful_ops_get_independent_state_per_call_site() {
     // a region accumulate independent phase. With SHARED state, one would
     // corrupt the other's phase. With independent per-site state:
     //   a = phasor(100) → samples: [0, 100/48000, 200/48000, …]
-    //   b = phasor(200) → samples: [0, 200/48000, 400/48000, …]
+    //   b = phasor(200) → samples: [200/48000, 400/48000, 600/48000, …]
+    //   (phasor is increment-then-output per gen~ conformance)
     //
     // The two channels are visibly different, proving independence.
     let out = render(
@@ -184,10 +185,10 @@ fn stateful_ops_get_independent_state_per_call_site() {
         3,
     );
     let expected_a: Vec<f64> = (0..3)
-        .map(|i| (i as f64) * 100.0 / 48000.0)
+        .map(|i| ((i + 1) as f64) * 100.0 / 48000.0)
         .collect();
     let expected_b: Vec<f64> = (0..3)
-        .map(|i| (i as f64) * 200.0 / 48000.0)
+        .map(|i| ((i + 1) as f64) * 200.0 / 48000.0)
         .collect();
     assert_eq!(out.ch(0), &expected_a[..3]);
     assert_eq!(out.ch(1), &expected_b[..3]);
@@ -344,11 +345,12 @@ fn for_with_stateful_step_keeps_per_site_state() {
     // Loop runs i=0,1,2. Each iter body: a = phasor(440).
     let src = "for (i = 0; i < 3; i += 1 + noise() * 0) { a = phasor(440); } out1 = a;";
     let out = opengen_testkit::render(src, 48_000.0, 1);
-    // Body phasor(440) runs 3 times within sample 0:
-    //   iter 0: phase=0,      out=0
-    //   iter 1: phase=440/48000,   out=440/48000
-    //   iter 2: phase=880/48000,  out=880/48000
-    let expected = 2.0 * 440.0 / 48000.0;
+    // Body phasor(440) runs 3 times within sample 0 (increment-then-output
+    // per gen~ conformance):
+    //   iter 0: out=440/48000
+    //   iter 1: out=880/48000
+    //   iter 2: out=1320/48000
+    let expected = 3.0 * 440.0 / 48000.0;
     assert_eq!(out.ch(0)[0], expected);
 }
 
