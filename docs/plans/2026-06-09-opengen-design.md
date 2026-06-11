@@ -255,4 +255,5 @@ These items need real Max gen~ renders to produce golden WAVs (per `conformance/
 - 4 remaining vendor genexpr parse failures (comma contexts + named-arg-in-call; recorded at Checkpoint C: 76/80)
 - peek/poke NaN + (−1,0)-index conformance items
 - `^^` precedence conformance cross-check (the plan's ladder was mis-transcribed; vendor PEG won: `||` → `^^` → `&&` → `|` → `^` → `&`)
+- declaration-ordering strictness: real gen~ rejects declarations after expression statements ("declarations must come before expressions", observed Max 9 2026-06-10; matches `docs/research/gen_docs/genexpr_ebnf.md` program order). opengen's parser is lenient — add a strict mode or lint warning so authored patches stay gen~-loadable
 - C++ emitter (the M3 milestone itself)

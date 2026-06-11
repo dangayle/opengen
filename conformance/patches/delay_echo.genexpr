@@ -7,9 +7,14 @@
 //
 // Impulse generated via history counter:
 //   h[n] = h[n-1] + 1, imp[n] = (h[n] == 0) → fires at n=0 only.
+//
+// NOTE: gen~ requires declarations BEFORE expression statements in a codebox
+// ("declarations must come before expressions" — observed in Max 9,
+// 2026-06-10; matches docs/research/gen_docs/genexpr_ebnf.md program order).
+// opengen's parser is lenient and accepts them anywhere.
+Delay d(64);
 h = history(h + 1);
 imp = eq(h, 0);
-Delay d(64);
 d.write(imp);
 out1 = d.read(1);
 out2 = d.read(4);

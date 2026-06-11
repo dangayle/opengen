@@ -470,7 +470,7 @@
         "box": {
          "id": "cb-1",
          "maxclass": "codebox",
-         "code": "// delay_echo.genexpr\n// Impulse at sample 0 fed into a 64-sample delay line with three taps.\n// Tests delay_write + delay_read with linear interpolation.\n// out1 = tap at 1 sample (1-sample delayed impulse)\n// out2 = tap at 4 samples (4-sample delayed impulse)\n// out3 = tap at 16 samples (16-sample delayed impulse)\n//\n// Impulse generated via history counter:\n//   h[n] = h[n-1] + 1, imp[n] = (h[n] == 0) \u2192 fires at n=0 only.\nh = history(h + 1);\nimp = eq(h, 0);\nDelay d(64);\nd.write(imp);\nout1 = d.read(1);\nout2 = d.read(4);\nout3 = d.read(16);\n",
+         "code": "// delay_echo.genexpr\n// Impulse at sample 0 fed into a 64-sample delay line with three taps.\n// Tests delay_write + delay_read with linear interpolation.\n// out1 = tap at 1 sample (1-sample delayed impulse)\n// out2 = tap at 4 samples (4-sample delayed impulse)\n// out3 = tap at 16 samples (16-sample delayed impulse)\n//\n// Impulse generated via history counter:\n//   h[n] = h[n-1] + 1, imp[n] = (h[n] == 0) \u2192 fires at n=0 only.\n//\n// NOTE: gen~ requires declarations BEFORE expression statements in a codebox\n// (\"declarations must come before expressions\" \u2014 observed in Max 9,\n// 2026-06-10; matches docs/research/gen_docs/genexpr_ebnf.md program order).\n// opengen's parser is lenient and accepts them anywhere.\nDelay d(64);\nh = history(h + 1);\nimp = eq(h, 0);\nd.write(imp);\nout1 = d.read(1);\nout2 = d.read(4);\nout3 = d.read(16);\n",
          "numinlets": 0,
          "numoutlets": 3,
          "outlettype": [
