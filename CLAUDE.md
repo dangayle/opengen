@@ -16,12 +16,13 @@ Read `docs/plans/2026-06-09-opengen-design.md` (the full design document) and `d
 - `opengen-ir` — Typed dataflow graph IR: nodes, ports, operators, explicit state declarations
 - `opengen-ops` — **THE SPEC**. One module per operator. Rustdoc = normative definition (math, provenance, boundaries). Doctests = executable spec. This is the language reference.
 - `opengen-genexpr` — `.genexpr` lexer/parser → AST → lowering to IR
+- `opengen-gendsp` — `.gendsp`/`.maxpat`/`.amxd` JSON loader: patcher model, box-text classifier, graph builders (direct + subpatcher/abstraction flattening)
 - `opengen-compile` — IR → Rust closure graph; topo sort, cycle detection, probes, deterministic execution
 - `opengen-testkit` — Doctest façade: `render(src, sr, n_samples)` for spec examples
 - `opengen-analysis` — Impulse/frequency response, FFT, spectrum analysis, golden-WAV comparison, plotting (rustfft, hound, plotters)
 - `opengen-cli` — `opengen run/plot/probe` commands (clap)
 
-**Zero-external-deps rule**: `opengen-ir`, `opengen-ops`, `opengen-genexpr`, `opengen-compile`, `opengen-testkit` have no external dependencies. Only `opengen-analysis` (rustfft/hound/plotters) and `opengen-cli` (clap) pull in crates.
+**Zero-external-deps rule**: `opengen-ir`, `opengen-ops`, `opengen-genexpr`, `opengen-gendsp`, `opengen-compile`, `opengen-testkit` have no external dependencies. Only `opengen-analysis` (rustfft/hound/plotters) and `opengen-cli` (clap) pull in crates.
 
 ## The Operator Production Line
 
@@ -137,6 +138,43 @@ Authored test patches batch-rendered through real gen~ in Max (offline/occasiona
 - **Guarantee**: Same patch + seed + inputs = identical bits, all platforms, all backends
 
 Any nondeterminism is a bug. Tests rely on exact equality for deterministic operations.
+
+## Evidence & Conformance (M2 additions)
+
+### 1. Gendsp evidence protocol
+
+Conformance uses three corpora (see `crates/opengen-analysis/tests/m2_exit.rs`):
+- **Wakefield GSOT** (official gen~ examples, primary) — deep assertions: parse, compile, render, analysis.
+- **Fors .amxd** (secondary) — parse embedded `dsp.gen` patchers + build smoke.
+- **dang-tools** (stress) — complex routing, multi-tap Delay, declarator lists.
+
+Corpus paths default to `reference/` (gitignored). Override with `OPENGEN_DANG_TOOLS` / `OPENGEN_FORS` env vars.
+
+**Ratchet rule (D17):** each corpus test pins the observed pass count at commit time. The test fails only if coverage DROPS. Current pins: GSOT 121/189, dang-tools 31/36, Fors 14/34. Re-pin upward when fixes raise coverage.
+
+### 2. genlib citation rule
+
+`reference/genlib/gen_dsp/genlib_ops.h` is EULA-tagged (`eula-reference`). Cite path + facts only, never quote verbatim. It is top-tier evidence — actual gen~ C++ semantics — ranking alongside `# Documented` in the provenance hierarchy.
+
+### 3. `docs/research/gen_docs/` citation rule
+
+The `docs/research/gen_docs/` directory contains our own research prose (EBNF, language reference, Zod schemas). It is **in-repo, citable** — safe to quote. These documents were derived from Max reference materials but are original expression.
+
+### 4. Update-phase / deferred-port kernel contract
+
+Compiled execution follows a two-phase model (`crates/opengen-compile/src/lib.rs`, `crates/opengen-ops/src/registry.rs`):
+1. **Compute phase** — all kernels (`Kernel` type) execute in topological order (NodeId tie-break). Kernels **MUST NOT** read input values arriving on `deferred_ports` (the "write" feedback ports of `history` port 0, `delay` port 0).
+2. **Update phase** — all deferred `UpdateFn` callbacks run after every Compute step completes, in ascending NodeId order. These handle end-of-sample state writes (history push, delay shift).
+
+This guarantees freedom from read-after-write hazards: all reads happen before any deferred write updates state.
+
+### 5. genbo machine-validation step
+
+Authored conformance patches must pass `tools/validate-with-genbo.sh` before golden rendering. This validates GenExpr syntax against Max's own `genbo.js` parser (no GUI needed). The script exits 0 when Max is absent, so it is CI-safe.
+
+### 6. gen~ patcher semantics: inlet summation
+
+Multiple patch cords into the same inlet are **summed** (verified M2 in both graph builders at `crates/opengen-gendsp/src/build.rs:331-352`). This matches gen~'s implicit signal summation.
 
 ## Legal Rules (Hard Constraints)
 

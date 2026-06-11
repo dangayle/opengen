@@ -222,11 +222,37 @@ Trademarks: "Max," "gen~," "RNBO," likely "Gen."
 
 ## Open Items
 
-- Final project name before any public release.
-- gen~ conformance harness mechanics (Max project + batch-render script) — design in M2; settles the phasor wrap-semantics `# Observed` question (see `crates/opengen-ops/src/osc.rs` phasor rustdoc).
-- Testkit gaps found in M1 final review: `render_with_inputs()` for filter tests (currently need manual compile/process loop); `assert_stable!` one-liner (finiteness/denormal/DC/RMS bounds); batch probe retrieval (process_n returning all probes).
-- `Response::phase_at` linear interpolation breaks across ±π wrap (documented M1 limitation).
-- `clip`/`wrap`/`fold` behavior for inverted bounds (hi < lo) unspecified — needs `# Definition` decision in M2.
-- Missing scalar math ops for M2 early: sin, cos, tan, exp, log, atan2.
-- Structured error types with source locations (currently String wrappers).
-- genlib export + Cycling74 gen-plugin-export clone into `reference/` (deferred from Task 2).
+- **Final project name** before any public release.
+
+### Corpus hierarchy
+
+Conformance exit evidence (`crates/opengen-analysis/tests/m2_exit.rs`) uses three corpora:
+- **Wakefield GSOT** (official gen~ examples, 189 `.gendsp` files) — primary corpus, deep assertions (parse + compile + render + analysis).
+- **Fors .amxd** devices (34 files with embedded `dsp.gen` patchers) — secondary, parse + build smoke.
+- **dang-tools** (36 `.gendsp` patchers) — stress: Delay multi-tap, declarator lists, complex routing.
+
+Default paths live under `reference/` (gitignored). Override with `OPENGEN_DANG_TOOLS` / `OPENGEN_FORS` environment variables.
+
+**Ratchet rule (D17):** each corpus test pins the observed pass count at commit time. The test fails only if coverage DROPS. Current pins: GSOT 121/189, dang-tools 31/36, Fors 14/34. When fixes raise coverage, re-pin upward.
+
+### Human-in-the-loop (awaiting Max renders)
+
+These items need real Max gen~ renders to produce golden WAVs (per `conformance/CHECKLIST.md`):
+- **phasor** `# Observed` increment-order + range_inverted_bounds golden WAVs.
+- **gen_resonator vendor sign bug:** shipped example `gen_resonator.gendsp` obj-30 computes `e^(+bw/2)` where the canonical two-pole needs `e^(−bw/2)`. Root-caused 2026-06-10 against opengen's deterministic engine. Full analysis + draft Cycling '74 report in [`docs/research/gen_resonator_sign_bug.md`](../research/gen_resonator_sign_bug.md). Pending: verify silence in real Max (load in gen~ host, drive with noise on in1, bw = 0.005, confirm silence) and submit the report upstream. See `conformance/CHECKLIST.md`.
+
+### M3 backlog (accumulated during M2 execution)
+
+- `selector`/`gate`/`elapsed`/multi-out operators
+- abstraction calls inside control flow
+- `wave` operator
+- multi-channel data
+- `require`
+- Delay member calls inside regions
+- early returns in functions
+- lexer cursor-snapshot refactor (replace clone-lexer lookahead)
+- for-init comma expressions
+- 4 remaining vendor genexpr parse failures (comma contexts + named-arg-in-call; recorded at Checkpoint C: 76/80)
+- peek/poke NaN + (−1,0)-index conformance items
+- `^^` precedence conformance cross-check (the plan's ladder was mis-transcribed; vendor PEG won: `||` → `^^` → `&&` → `|` → `^` → `&`)
+- C++ emitter (the M3 milestone itself)

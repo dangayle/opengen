@@ -65,7 +65,16 @@ No guessing. No listening. Machine-verifiable correctness.
 - Analysis toolkit: impulse/frequency response, spectrum, golden-WAV comparison
 - CLI: `run`, `plot`, `probe`
 
-**M2 roadmap**: Full GenExpr grammar (control flow, multi-out functions), `.gendsp` frontend, gen~ conformance harness, remaining operators.
+**M2 complete** (language completion + gendsp frontend):
+- Full GenExpr grammar: control flow (if/for/while), functions, multi-out, declarator lists
+- Memory operators: `delay`, `data`, `buffer`, `peek`, `poke` with update-phase semantics
+- `.gendsp`/`.maxpat`/`.amxd` loader (`opengen-gendsp`) — patcher model, box-text classifier, graph builders with subpatcher + abstraction flattening
+- Full operator coverage across math, trig, logic, range, route, memory, filter, sample tiers (~90 operators in 11 modules)
+- Conformance harness + corpus ratchets (GSOT 121/189, dang-tools 31/36, Fors 14/34)
+- Verifiable proof point: machine-testing found a sign bug in a shipped gen~ example (`gen_resonator.gendsp` obj-30) — see `docs/research/gen_resonator_sign_bug.md`
+- `tools/validate-with-genbo.sh` for CI-safe GenExpr syntax validation using Max's own parser
+
+**M3 roadmap**: C++ emitter (dependency-free, bit-for-bit matching the Rust backend).
 
 ## Documentation
 
