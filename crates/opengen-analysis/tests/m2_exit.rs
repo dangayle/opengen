@@ -498,7 +498,7 @@ fn exit_fors_smoke_ratchet() {
     };
 
     let mut amxd_files: Vec<PathBuf> = Vec::new();
-    collect_files(&fors_dir, &mut amxd_files, ".amxd");
+    collect_files(&fors_dir, &mut amxd_files, "amxd");
     amxd_files.sort();
 
     let total = amxd_files.len();

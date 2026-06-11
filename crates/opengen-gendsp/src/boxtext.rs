@@ -128,15 +128,18 @@ pub fn classify_box_text(text: &str) -> BoxKind {
     }
 
     // ── Delay ──────────────────────────────────────────────────────
-    if cmd == "delay" && rest.len() >= 1 {
-        if let Ok(size) = rest[0].parse::<u32>() {
-            let taps = if rest.len() > 1 {
-                rest[1].parse::<u32>().unwrap_or(1)
-            } else {
-                1
-            };
-            return BoxKind::Delay(size, taps);
-        }
+    if cmd == "delay" {
+        let size = if rest.len() >= 1 {
+            rest[0].parse::<u32>().unwrap_or(48000)
+        } else {
+            48000 // default = samplerate per gen~ convention
+        };
+        let taps = if rest.len() > 1 {
+            rest[1].parse::<u32>().unwrap_or(1)
+        } else {
+            1
+        };
+        return BoxKind::Delay(size, taps);
     }
 
     // ── Data / Buffer ──────────────────────────────────────────────
@@ -338,6 +341,8 @@ mod tests {
     fn classify_delay() {
         assert_eq!(classify_box_text("delay 2000"), BoxKind::Delay(2000, 1));
         assert_eq!(classify_box_text("delay 44100"), BoxKind::Delay(44100, 1));
+        // delay with no size defaults to samplerate (48000)
+        assert_eq!(classify_box_text("delay"), BoxKind::Delay(48000, 1));
     }
 
     // ── Data / Buffer ──────────────────────────────────────────────
