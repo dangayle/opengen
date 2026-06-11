@@ -1,0 +1,13 @@
+// dcblock_impulse.genexpr
+// DISAMBIGUATION PROBE: distinguishes the two hypotheses for why real gen~
+// outputs silence for dcblock of a constant input (see dcblock_step):
+//   (a) lazy x1-init to the first input  → y = [0, -1, -0.9997, ...]
+//   (b) compiler constant-folding        → y = [1, -1+..., ...] (classic IR)
+// opengen implements (a); if the Max golden starts with 1.0, switch to (b)
+// semantics (genlib DCBlock form) and re-derive dcblock_step's explanation.
+//
+// gen~ compat: declared History, reads before write (see history_counter).
+History h(0);
+imp = eq(h, 0);
+out1 = dcblock(imp);
+h = h + 1;

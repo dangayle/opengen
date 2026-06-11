@@ -154,7 +154,7 @@ Corpus paths default to `reference/` (gitignored). Override with `OPENGEN_DANG_T
 
 ### 2. genlib citation rule
 
-`reference/genlib/gen_dsp/genlib_ops.h` is EULA-tagged (`eula-reference`). Cite path + facts only, never quote verbatim. It is top-tier evidence — actual gen~ C++ semantics — ranking alongside `# Documented` in the provenance hierarchy.
+`reference/genlib/gen_dsp/genlib_ops.h` is EULA-tagged (`eula-reference`). Cite path + facts only, never quote verbatim. It is strong evidence, BUT it is the code-EXPORT runtime, not the in-Max gen~ JIT — and the two demonstrably diverge (M2 conformance, 2026-06-11: `dcblock` startup init and `clip` clamp-composition order differ between genlib and gen~ inside Max). When a conformance golden from real gen~ contradicts genlib, **the golden wins**; record genlib's behavior under `# Divergence`.
 
 ### 3. `docs/research/gen_docs/` citation rule
 

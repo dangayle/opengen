@@ -124,15 +124,16 @@
      "id": "obj-7",
      "maxclass": "newobj",
      "numinlets": 1,
-     "numoutlets": 18,
+     "numoutlets": 19,
      "patching_rect": [
       110,
       230,
       1000,
       22
      ],
-     "text": "route cycle_440_ch0 dcblock_step_ch0 delay_echo_ch0 delay_echo_ch1 delay_echo_ch2 history_counter_ch0 history_counter_ch1 phasor_incr_order_ch0 range_inverted_bounds_ch0 range_inverted_bounds_ch1 range_inverted_bounds_ch2 sah_latch_ch0 sah_latch_ch1 slide_step_ch0 triangle_duty_ch0 triangle_duty_ch1 triangle_duty_ch2",
+     "text": "route cycle_440_ch0 dcblock_impulse_ch0 dcblock_step_ch0 delay_echo_ch0 delay_echo_ch1 delay_echo_ch2 history_counter_ch0 history_counter_ch1 phasor_incr_order_ch0 range_inverted_bounds_ch0 range_inverted_bounds_ch1 range_inverted_bounds_ch2 sah_latch_ch0 sah_latch_ch1 slide_step_ch0 triangle_duty_ch0 triangle_duty_ch1 triangle_duty_ch2",
      "outlettype": [
+      "",
       "",
       "",
       "",
@@ -344,6 +345,184 @@
       230,
       22
      ],
+     "text": "gen~ @title dcblock_impulse",
+     "outlettype": [
+      "signal"
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       760.0,
+       520.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// dcblock_impulse.genexpr\n// DISAMBIGUATION PROBE: distinguishes the two hypotheses for why real gen~\n// outputs silence for dcblock of a constant input (see dcblock_step):\n//   (a) lazy x1-init to the first input  \u2192 y = [0, -1, -0.9997, ...]\n//   (b) compiler constant-folding        \u2192 y = [1, -1+..., ...] (classic IR)\n// opengen implements (a); if the Max golden starts with 1.0, switch to (b)\n// semantics (genlib DCBlock form) and re-derive dcblock_step's explanation.\n//\n// gen~ compat: declared History, reads before write (see history_counter).\nHistory h(0);\nimp = eq(h, 0);\nout1 = dcblock(imp);\nh = h + 1;\n",
+         "numinlets": 0,
+         "numoutlets": 1,
+         "outlettype": [
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "el-1",
+         "maxclass": "newobj",
+         "text": "elapsed",
+         "numinlets": 0,
+         "numoutlets": 1,
+         "outlettype": [
+          ""
+         ],
+         "patching_rect": [
+          550.0,
+          30.0,
+          60.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "buf-0",
+         "maxclass": "newobj",
+         "text": "buffer dcblock_impulse_ch0",
+         "numinlets": 0,
+         "numoutlets": 2,
+         "outlettype": [
+          "",
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          360.0,
+          150.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "pk-0",
+         "maxclass": "newobj",
+         "text": "poke dcblock_impulse_ch0 0",
+         "numinlets": 2,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          400.0,
+          150.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          440.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "pk-0",
+          0
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "el-1",
+          0
+         ],
+         "destination": [
+          "pk-0",
+          1
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       }
+      ]
+     }
+    }
+   },
+   {
+    "box": {
+     "id": "obj-11",
+     "maxclass": "newobj",
+     "numinlets": 1,
+     "numoutlets": 1,
+     "patching_rect": [
+      300,
+      325,
+      75,
+      22
+     ],
+     "text": "buffer~ dcblock_impulse_ch0 86",
+     "outlettype": [
+      "float"
+     ]
+    }
+   },
+   {
+    "box": {
+     "id": "obj-12",
+     "maxclass": "newobj",
+     "numinlets": 1,
+     "numoutlets": 1,
+     "patching_rect": [
+      580,
+      290,
+      230,
+      22
+     ],
      "text": "gen~ @title dcblock_step",
      "outlettype": [
       "signal"
@@ -494,12 +673,12 @@
    },
    {
     "box": {
-     "id": "obj-11",
+     "id": "obj-13",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      300,
+      580,
       325,
       75,
       22
@@ -512,12 +691,12 @@
    },
    {
     "box": {
-     "id": "obj-12",
+     "id": "obj-14",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 3,
      "patching_rect": [
-      580,
+      860,
       290,
       230,
       22
@@ -846,12 +1025,12 @@
    },
    {
     "box": {
-     "id": "obj-13",
+     "id": "obj-15",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      580,
+      860,
       325,
       75,
       22
@@ -864,12 +1043,12 @@
    },
    {
     "box": {
-     "id": "obj-14",
+     "id": "obj-16",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      658,
+      938,
       325,
       75,
       22
@@ -882,12 +1061,12 @@
    },
    {
     "box": {
-     "id": "obj-15",
+     "id": "obj-17",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      736,
+      1016,
       325,
       75,
       22
@@ -900,13 +1079,13 @@
    },
    {
     "box": {
-     "id": "obj-16",
+     "id": "obj-18",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 2,
      "patching_rect": [
-      860,
-      290,
+      20,
+      390,
       230,
       22
      ],
@@ -1147,13 +1326,13 @@
    },
    {
     "box": {
-     "id": "obj-17",
+     "id": "obj-19",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      860,
-      325,
+      20,
+      425,
       75,
       22
      ],
@@ -1165,13 +1344,13 @@
    },
    {
     "box": {
-     "id": "obj-18",
+     "id": "obj-20",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      938,
-      325,
+      98,
+      425,
       75,
       22
      ],
@@ -1183,12 +1362,12 @@
    },
    {
     "box": {
-     "id": "obj-19",
+     "id": "obj-21",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      20,
+      300,
       390,
       230,
       22
@@ -1343,12 +1522,12 @@
    },
    {
     "box": {
-     "id": "obj-20",
+     "id": "obj-22",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      20,
+      300,
       425,
       75,
       22
@@ -1361,12 +1540,12 @@
    },
    {
     "box": {
-     "id": "obj-21",
+     "id": "obj-23",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 3,
      "patching_rect": [
-      300,
+      580,
       390,
       230,
       22
@@ -1695,12 +1874,12 @@
    },
    {
     "box": {
-     "id": "obj-22",
+     "id": "obj-24",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      300,
+      580,
       425,
       75,
       22
@@ -1713,12 +1892,12 @@
    },
    {
     "box": {
-     "id": "obj-23",
+     "id": "obj-25",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      378,
+      658,
       425,
       75,
       22
@@ -1731,12 +1910,12 @@
    },
    {
     "box": {
-     "id": "obj-24",
+     "id": "obj-26",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      456,
+      736,
       425,
       75,
       22
@@ -1749,12 +1928,12 @@
    },
    {
     "box": {
-     "id": "obj-25",
+     "id": "obj-27",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 2,
      "patching_rect": [
-      580,
+      860,
       390,
       230,
       22
@@ -1996,12 +2175,12 @@
    },
    {
     "box": {
-     "id": "obj-26",
+     "id": "obj-28",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      580,
+      860,
       425,
       75,
       22
@@ -2014,12 +2193,12 @@
    },
    {
     "box": {
-     "id": "obj-27",
+     "id": "obj-29",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      658,
+      938,
       425,
       75,
       22
@@ -2032,13 +2211,13 @@
    },
    {
     "box": {
-     "id": "obj-28",
+     "id": "obj-30",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      860,
-      390,
+      20,
+      490,
       230,
       22
      ],
@@ -2192,13 +2371,13 @@
    },
    {
     "box": {
-     "id": "obj-29",
+     "id": "obj-31",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      860,
-      425,
+      20,
+      525,
       75,
       22
      ],
@@ -2210,12 +2389,12 @@
    },
    {
     "box": {
-     "id": "obj-30",
+     "id": "obj-32",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 3,
      "patching_rect": [
-      20,
+      300,
       490,
       230,
       22
@@ -2544,12 +2723,12 @@
    },
    {
     "box": {
-     "id": "obj-31",
+     "id": "obj-33",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      20,
+      300,
       525,
       75,
       22
@@ -2562,12 +2741,12 @@
    },
    {
     "box": {
-     "id": "obj-32",
+     "id": "obj-34",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      98,
+      378,
       525,
       75,
       22
@@ -2580,12 +2759,12 @@
    },
    {
     "box": {
-     "id": "obj-33",
+     "id": "obj-35",
      "maxclass": "newobj",
      "numinlets": 1,
      "numoutlets": 1,
      "patching_rect": [
-      176,
+      456,
       525,
       75,
       22
@@ -2689,7 +2868,7 @@
       3
      ],
      "destination": [
-      "obj-14",
+      "obj-15",
       0
      ]
     }
@@ -2701,7 +2880,7 @@
       4
      ],
      "destination": [
-      "obj-15",
+      "obj-16",
       0
      ]
     }
@@ -2725,7 +2904,7 @@
       6
      ],
      "destination": [
-      "obj-18",
+      "obj-19",
       0
      ]
     }
@@ -2761,7 +2940,7 @@
       9
      ],
      "destination": [
-      "obj-23",
+      "obj-24",
       0
      ]
     }
@@ -2773,7 +2952,7 @@
       10
      ],
      "destination": [
-      "obj-24",
+      "obj-25",
       0
      ]
     }
@@ -2797,7 +2976,7 @@
       12
      ],
      "destination": [
-      "obj-27",
+      "obj-28",
       0
      ]
     }
@@ -2833,7 +3012,7 @@
       15
      ],
      "destination": [
-      "obj-32",
+      "obj-33",
       0
      ]
     }
@@ -2845,7 +3024,19 @@
       16
      ],
      "destination": [
-      "obj-33",
+      "obj-34",
+      0
+     ]
+    }
+   },
+   {
+    "patchline": {
+     "source": [
+      "obj-7",
+      17
+     ],
+     "destination": [
+      "obj-35",
       0
      ]
     }

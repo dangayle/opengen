@@ -3,11 +3,20 @@
 This checklist documents the steps to produce authoritative golden WAV files
 by rendering conformance patches through **real gen~ in Max 9**.
 
-Until goldens land, the following operators remain `# Observed`-pending in
-their rustdoc:
+**2026-06-11: the first full golden render landed.** All 9 original patches
+are rendered and committed (`conformance/golden/`, float32, t=0-aligned);
+`phasor` (increment-then-output), `cycle` (cosine), `dcblock` (silent for
+constant input), and `clip` (inverted bounds pin to lo) were corrected from
+the goldens and their rustdoc upgraded to confirmed `# Observed`.
 
-- **`phasor`** — increment-order / wrap semantics (`conformance/patches/phasor_incr_order.genexpr`)
-- **`range_inverted_bounds`** — clip inverse-pin / wrap-fold-swap (`conformance/patches/range_inverted_bounds.genexpr`)
+Still pending a Max render:
+
+- **`dcblock_impulse`** — disambiguation probe (lazy x1-init vs compiler
+  constant-folding); see `conformance/patches/dcblock_impulse.genexpr`
+  header for the two predicted outcomes. Re-run the render session and
+  `cargo test -p opengen-analysis --test conformance` — if the new golden
+  starts with 1.0 instead of 0.0, dcblock needs the genlib (constant-fold)
+  interpretation instead.
 
 ## ~~Pending~~ CONFIRMED probe: gen_resonator silence (vendor sign bug)
 
