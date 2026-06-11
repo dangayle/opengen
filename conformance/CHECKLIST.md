@@ -40,25 +40,25 @@ Also report the patch bug to Cycling '74 (draft text in the research doc).
 - **Audio enabled** (DSP turned on — any output device works)
 - This repository checked out at the working directory
 
-## Steps (render kit v2 — rebuilt 2026-06-10)
+## Steps (render kit v3 — rebuilt 2026-06-10)
 
 > The original kit was never exercised and could not work (no start trigger,
-> unwired node.script, and it relied on a gen~ `code` message that does not
-> exist). v2 is fully static: one `gen~ @gen <stem>.genexpr` per patch, one
-> `record~` + `buffer~` pair per output channel (17 total). `node.script`
-> only sizes buffers and writes WAVs. Regenerate the host after adding a
-> patch: `python3 tools/gen_render_host.py` (it also copies the `.genexpr`
-> sources next to the host — the patcher's own folder is always in Max's
-> search path, so no File Preferences setup is needed; the copies are
-> gitignored and `conformance/patches/` stays canonical).
+> unwired node.script, a gen~ `code` message that does not exist). v2's
+> `@gen <file>.genexpr` also failed: gen~ has no documented way to load a
+> `.genexpr` file from its box text (`.genexpr` only loads via `require()`
+> for function libraries). v3 EMBEDS each patch's GenExpr source as a
+> codebox inside a dsp.gen subpatcher (the corpus-verified structure), so
+> there is no file resolution at all. One `record~` + `buffer~` pair per
+> output channel (17 total); `node.script` only sizes buffers and writes
+> WAVs. Regenerate after adding/editing a patch:
+> `python3 tools/gen_render_host.py` (reads `conformance/patches/`).
 
 ### 1. Open Render Host
 
 Open `conformance/render/render_host.maxpat` in Max 9 and check the Max
-console: **all 9 gen~ objects must compile with no errors**. If you see
-"could not find gen patcher" errors, the `.genexpr` copies are missing —
-run `python3 tools/gen_render_host.py` and reopen. Never save the patch
-after a failed load: Max prunes patchcords from collapsed gen~ outlets.
+console: **all 9 gen~ objects must compile with no errors**. Never save the
+patch after a failed load: Max prunes patchcords from collapsed gen~
+outlets.
 
 The `node.script` autostarts (`@autostart 1`); the console should show
 `render_runner: sized 17 buffers to 4096 samples`. If not, click the
@@ -105,7 +105,9 @@ After the runner completes, verify that WAV files appear in
 
 If some files are missing, check the Max window for error messages from
 the runner script. Common issues:
-- "could not find gen patcher" → rerun `python3 tools/gen_render_host.py` (copies missing)
+- gen~ compile errors in the console → a codebox source didn't compile; the
+  console names the offending expression — report it (possible GenExpr
+  dialect gap in an authored patch)
 - Node for Max not available → node.script won't start
 - File permissions → buffer~ write may fail
 

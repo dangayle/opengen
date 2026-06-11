@@ -2,4 +2,3 @@
 /.pi/
 /reference/
 .DS_Store
-conformance/render/*.genexpr

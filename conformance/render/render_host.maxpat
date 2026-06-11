@@ -28,7 +28,7 @@
       620,
       120
      ],
-     "text": "GenExpr Conformance Render Host (v2)\nPatch sources are copied next to this file by tools/gen_render_host.py.\n1. Open this patch; check Max console: all 9 gen~ must compile clean.\n2. node.script autostarts (or click [script start]); console shows buffer sizing.\n3. Click [arm] with DSP OFF.\n4. Turn DSP ON (ezdac~), wait 1 second, turn DSP OFF.\n5. Click [writewavs] \u2014 17 WAVs land in conformance/golden/.\nRe-run? Close and reopen the patch first (fresh gen~ state)."
+     "text": "GenExpr Conformance Render Host (v3)\nGenExpr sources are EMBEDDED (codebox in each gen~) \u2014 nothing to resolve.\n1. Open this patch; check Max console: all 9 gen~ must compile clean.\n2. node.script autostarts (or click [script start]); console shows buffer sizing.\n3. Click [arm] with DSP OFF.\n4. Turn DSP ON (ezdac~), wait 1 second, turn DSP OFF.\n5. Click [writewavs] \u2014 17 WAVs land in conformance/golden/.\nRe-run? Close and reopen the patch first (fresh gen~ state)."
     }
    },
    {
@@ -203,10 +203,76 @@
       220,
       22
      ],
-     "text": "gen~ @gen cycle_440.genexpr",
+     "text": "gen~ @title cycle_440",
      "outlettype": [
       "signal"
-     ]
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       600.0,
+       450.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// cycle_440.genexpr\n// Pure sine wave at A440 (standard tuning reference).\n// Tests that cycle() produces correct sine output at musical frequency.\n// Mono output: sin(2\u03c0\u00b7440\u00b7t) sampled at 48 kHz.\nout1 = cycle(440);\n",
+         "numinlets": 0,
+         "numoutlets": 1,
+         "outlettype": [
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       }
+      ]
+     }
     }
    },
    {
@@ -257,10 +323,76 @@
       220,
       22
      ],
-     "text": "gen~ @gen dcblock_step.genexpr",
+     "text": "gen~ @title dcblock_step",
      "outlettype": [
       "signal"
-     ]
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       600.0,
+       450.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// dcblock_step.genexpr\n// Step response of dcblock (one-pole highpass, coefficient 0.9997).\n// Constant input 1.0: first sample passes through, then exponential decay to ~0.\n// out1 = highpassed step (1.0, then decays toward 0).\n//\n// Analytic decay envelope: y[n] = 0.9997^(n-1) for n >= 1, y[0] = 1.0.\nout1 = dcblock(1.0);\n",
+         "numinlets": 0,
+         "numoutlets": 1,
+         "outlettype": [
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       }
+      ]
+     }
     }
    },
    {
@@ -311,12 +443,134 @@
       220,
       22
      ],
-     "text": "gen~ @gen delay_echo.genexpr",
+     "text": "gen~ @title delay_echo",
      "outlettype": [
       "signal",
       "signal",
       "signal"
-     ]
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       600.0,
+       450.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// delay_echo.genexpr\n// Impulse at sample 0 fed into a 64-sample delay line with three taps.\n// Tests delay_write + delay_read with linear interpolation.\n// out1 = tap at 1 sample (1-sample delayed impulse)\n// out2 = tap at 4 samples (4-sample delayed impulse)\n// out3 = tap at 16 samples (16-sample delayed impulse)\n//\n// Impulse generated via history counter:\n//   h[n] = h[n-1] + 1, imp[n] = (h[n] == 0) \u2192 fires at n=0 only.\nh = history(h + 1);\nimp = eq(h, 0);\nDelay d(64);\nd.write(imp);\nout1 = d.read(1);\nout2 = d.read(4);\nout3 = d.read(16);\n",
+         "numinlets": 0,
+         "numoutlets": 3,
+         "outlettype": [
+          "",
+          "",
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-2",
+         "maxclass": "newobj",
+         "text": "out 2",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          110.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-3",
+         "maxclass": "newobj",
+         "text": "out 3",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          190.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          1
+         ],
+         "destination": [
+          "go-2",
+          0
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          2
+         ],
+         "destination": [
+          "go-3",
+          0
+         ]
+        }
+       }
+      ]
+     }
     }
    },
    {
@@ -439,11 +693,105 @@
       220,
       22
      ],
-     "text": "gen~ @gen history_counter.genexpr",
+     "text": "gen~ @title history_counter",
      "outlettype": [
       "signal",
       "signal"
-     ]
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       600.0,
+       450.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// history_counter.genexpr\n// Impulse-at-sample-zero via history counter.\n// h[n] = h[n-1] + 1, h[0] = 0 (zero-initialized history).\n// imp = (h == 0) \u2192 1.0 at sample 0 only, 0.0 thereafter.\n// out1 = impulse train (single impulse at origin).\n// out2 = counter value (monotonic integer sequence 0, 1, 2, ...).\nh = history(h + 1);\nimp = eq(h, 0);\nout1 = imp;\nout2 = h;\n",
+         "numinlets": 0,
+         "numoutlets": 2,
+         "outlettype": [
+          "",
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-2",
+         "maxclass": "newobj",
+         "text": "out 2",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          110.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          1
+         ],
+         "destination": [
+          "go-2",
+          0
+         ]
+        }
+       }
+      ]
+     }
     }
    },
    {
@@ -530,10 +878,76 @@
       220,
       22
      ],
-     "text": "gen~ @gen phasor_incr_order.genexpr",
+     "text": "gen~ @title phasor_incr_order",
      "outlettype": [
       "signal"
-     ]
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       600.0,
+       450.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// phasor_incr_order.genexpr\n// Settles the M1 `# Observed` wrap/increment-order question.\n// Odd frequency 997 Hz avoids bin-aligned coincidences at 48 kHz.\n// Output is mono: sawtooth ramp [0, 1) at 997 Hz.\nout1 = phasor(997);\n",
+         "numinlets": 0,
+         "numoutlets": 1,
+         "outlettype": [
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       }
+      ]
+     }
     }
    },
    {
@@ -584,12 +998,134 @@
       220,
       22
      ],
-     "text": "gen~ @gen range_inverted_bounds.genexpr",
+     "text": "gen~ @title range_inverted_bounds",
      "outlettype": [
       "signal",
       "signal",
       "signal"
-     ]
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       600.0,
+       450.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// range_inverted_bounds.genexpr\n// Tests clip/wrap/fold with inverted bounds (lo > hi).\n// Upgrades M1 Task 5 to `# Observed`.\n// clip(0.5, 1, 0): inverted bounds \u2192 pin to hi (0)\n// wrap(1.25, 1, 0): inverted \u2192 normalized to wrap(1.25, 0, 1) = 0.25\n// fold(1.25, 1, 0): inverted \u2192 normalized to fold(1.25, 0, 1) = 0.75\nout1 = clip(0.5, 1, 0);\nout2 = wrap(1.25, 1, 0);\nout3 = fold(1.25, 1, 0);\n",
+         "numinlets": 0,
+         "numoutlets": 3,
+         "outlettype": [
+          "",
+          "",
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-2",
+         "maxclass": "newobj",
+         "text": "out 2",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          110.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-3",
+         "maxclass": "newobj",
+         "text": "out 3",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          190.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          1
+         ],
+         "destination": [
+          "go-2",
+          0
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          2
+         ],
+         "destination": [
+          "go-3",
+          0
+         ]
+        }
+       }
+      ]
+     }
     }
    },
    {
@@ -712,11 +1248,105 @@
       220,
       22
      ],
-     "text": "gen~ @gen sah_latch.genexpr",
+     "text": "gen~ @title sah_latch",
      "outlettype": [
       "signal",
       "signal"
-     ]
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       600.0,
+       450.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// sah_latch.genexpr\n// Sample-and-hold and latch driven by history counter.\n// h = {0, 1, 2, 3, ..., 4095}\n//\n// sah: samples h when h crosses 2.5 (trigger at h=3).\n//   output: held=0 until sample 3, then 3 forever.\n//\n// latch: passes h when h is non-zero.\n//   output: h=0\u21920 (held), h=1\u21921, h=2\u21922, ...\nh = history(h + 1);\nout1 = sah(h, h, 2.5);\nout2 = latch(h, h);\n",
+         "numinlets": 0,
+         "numoutlets": 2,
+         "outlettype": [
+          "",
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-2",
+         "maxclass": "newobj",
+         "text": "out 2",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          110.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          1
+         ],
+         "destination": [
+          "go-2",
+          0
+         ]
+        }
+       }
+      ]
+     }
     }
    },
    {
@@ -803,10 +1433,76 @@
       220,
       22
      ],
-     "text": "gen~ @gen slide_step.genexpr",
+     "text": "gen~ @title slide_step",
      "outlettype": [
       "signal"
-     ]
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       600.0,
+       450.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// slide_step.genexpr\n// Step response of slide (logarithmic smoother).\n// Step from 0 to 1 at sample 1 (sample 0 is 0).\n// Slide time constants: up=4, down=4 samples.\n// out1 = slewed step (asymptotic approach to 1.0).\nh = history(h + 1);\nstep = switch(gt(h, 0), 1, 0);\nout1 = slide(step, 4, 4);\n",
+         "numinlets": 0,
+         "numoutlets": 1,
+         "outlettype": [
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       }
+      ]
+     }
     }
    },
    {
@@ -857,12 +1553,134 @@
       220,
       22
      ],
-     "text": "gen~ @gen triangle_duty.genexpr",
+     "text": "gen~ @title triangle_duty",
      "outlettype": [
       "signal",
       "signal",
       "signal"
-     ]
+     ],
+     "patcher": {
+      "fileversion": 1,
+      "appversion": {
+       "major": 9,
+       "minor": 0,
+       "revision": 0,
+       "architecture": "x64",
+       "modernui": 1
+      },
+      "classnamespace": "dsp.gen",
+      "rect": [
+       100.0,
+       100.0,
+       600.0,
+       450.0
+      ],
+      "boxes": [
+       {
+        "box": {
+         "id": "cb-1",
+         "maxclass": "codebox",
+         "code": "// triangle_duty.genexpr\n// Triangle wave at 100 Hz with three duty cycles.\n// Tests triangle(phase, duty) with varying symmetry.\n// out1 = 25% duty (quick rise, slow fall)\n// out2 = 50% duty (symmetric triangle)\n// out3 = 75% duty (slow rise, quick fall)\np = phasor(100);\nout1 = triangle(p, 0.25);\nout2 = triangle(p, 0.5);\nout3 = triangle(p, 0.75);\n",
+         "numinlets": 0,
+         "numoutlets": 3,
+         "outlettype": [
+          "",
+          "",
+          ""
+         ],
+         "patching_rect": [
+          30.0,
+          30.0,
+          480.0,
+          300.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-1",
+         "maxclass": "newobj",
+         "text": "out 1",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          30.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-2",
+         "maxclass": "newobj",
+         "text": "out 2",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          110.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       },
+       {
+        "box": {
+         "id": "go-3",
+         "maxclass": "newobj",
+         "text": "out 3",
+         "numinlets": 1,
+         "numoutlets": 0,
+         "patching_rect": [
+          190.0,
+          360.0,
+          60.0,
+          22.0
+         ]
+        }
+       }
+      ],
+      "lines": [
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          0
+         ],
+         "destination": [
+          "go-1",
+          0
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          1
+         ],
+         "destination": [
+          "go-2",
+          0
+         ]
+        }
+       },
+       {
+        "patchline": {
+         "source": [
+          "cb-1",
+          2
+         ],
+         "destination": [
+          "go-3",
+          0
+         ]
+        }
+       }
+      ]
+     }
     }
    },
    {

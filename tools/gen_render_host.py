@@ -1,35 +1,40 @@
 #!/usr/bin/env python3
 """Generate conformance/render/render_host.maxpat.
 
-Static render host: one gen~ per conformance patch (loaded via @gen),
-one record~ + buffer~ pair per output channel. node.script orchestrates
+Static render host: one gen~ per conformance patch with the GenExpr source
+EMBEDDED as a codebox inside a dsp.gen subpatcher (the corpus-verified
+structure — see gen~.resonator_bank_v2.maxpat). There is no file resolution
+at load time: gen~ has no documented way to reference a .genexpr file from
+its box text (.genexpr files only load via `require()` for function
+libraries, per the gen userguide), so embedding is the only reliable path.
+
+One record~ + buffer~ pair per output channel. node.script orchestrates
 buffer sizing (sizeinsamps 4096), record arming, and absolute-path WAV
 writes — no runtime code injection (vanilla gen~ has no `code` message).
 
-Also copies conformance/patches/*.genexpr next to the generated host:
-the patcher's own folder is always in Max's search path, so `@gen <stem>.genexpr`
-resolves with zero user configuration (the copies are gitignored;
-conformance/patches/ stays canonical).
-
-Regenerate after adding a conformance patch:
+Regenerate after adding/editing a conformance patch:
     python3 tools/gen_render_host.py
 """
 import json
-import shutil
 from pathlib import Path
 
-# stem -> number of output channels (keep in sync with conformance/patches/)
-PATCHES = {
-    "cycle_440": 1,
-    "dcblock_step": 1,
-    "delay_echo": 3,
-    "history_counter": 2,
-    "phasor_incr_order": 1,
-    "range_inverted_bounds": 3,
-    "sah_latch": 2,
-    "slide_step": 1,
-    "triangle_duty": 3,
-}
+import re
+
+REPO = Path(__file__).resolve().parent.parent
+PATCHES_DIR = REPO / "conformance" / "patches"
+
+# stem -> (source, n_out) derived from conformance/patches/*.genexpr
+def load_patches():
+    patches = {}
+    for f in sorted(PATCHES_DIR.glob("*.genexpr")):
+        src = f.read_text()
+        outs = max(int(m) for m in re.findall(r"out(\d+)\s*=", src))
+        ins = [int(m) for m in re.findall(r"\bin(\d+)\b", src)]
+        assert not ins, f"{f.stem}: render host assumes input-free patches"
+        patches[f.stem] = (src, outs)
+    return patches
+
+PATCHES = load_patches()
 
 boxes = []
 lines = []
@@ -57,11 +62,51 @@ def add_box(maxclass, text, x, y, w, h, n_in, n_out, outlettype=None, extra=None
 def connect(src, src_idx, dst, dst_idx):
     lines.append({"patchline": {"source": [src, src_idx], "destination": [dst, dst_idx]}})
 
+def gen_subpatcher(src, n_out):
+    """Build a dsp.gen patcher embedding `src` in a codebox wired to out boxes.
+
+    Structure verified against the vendor corpus (gen~ box with embedded
+    patcher, classnamespace dsp.gen, codebox with `code` attribute,
+    `out N` newobj boxes).
+    """
+    gboxes = [{"box": {
+        "id": "cb-1",
+        "maxclass": "codebox",
+        "code": src,
+        "numinlets": 0,
+        "numoutlets": n_out,
+        "outlettype": [""] * n_out,
+        "patching_rect": [30.0, 30.0, 480.0, 300.0],
+    }}]
+    glines = []
+    for k in range(n_out):
+        oid = f"go-{k + 1}"
+        gboxes.append({"box": {
+            "id": oid,
+            "maxclass": "newobj",
+            "text": f"out {k + 1}",
+            "numinlets": 1,
+            "numoutlets": 0,
+            "patching_rect": [30.0 + k * 80.0, 360.0, 60.0, 22.0],
+        }})
+        glines.append({"patchline": {"source": ["cb-1", k], "destination": [oid, 0]}})
+    return {
+        "fileversion": 1,
+        "appversion": {
+            "major": 9, "minor": 0, "revision": 0,
+            "architecture": "x64", "modernui": 1,
+        },
+        "classnamespace": "dsp.gen",
+        "rect": [100.0, 100.0, 600.0, 450.0],
+        "boxes": gboxes,
+        "lines": glines,
+    }
+
 # ── Instructions comment ─────────────────────────────────────────────────────
 add_box(
     "comment",
-    "GenExpr Conformance Render Host (v2)\n"
-    "Patch sources are copied next to this file by tools/gen_render_host.py.\n"
+    "GenExpr Conformance Render Host (v3)\n"
+    "GenExpr sources are EMBEDDED (codebox in each gen~) — nothing to resolve.\n"
     "1. Open this patch; check Max console: all 9 gen~ must compile clean.\n"
     "2. node.script autostarts (or click [script start]); console shows buffer sizing.\n"
     "3. Click [arm] with DSP OFF.\n"
@@ -90,7 +135,7 @@ route_top = add_box("newobj", "route rec buf", 20, 240, 100, 22, 1, 3, ["", "", 
 connect(script, 0, route_top, 0)
 
 buffer_names = []
-for stem, n_ch in PATCHES.items():
+for stem, (_, n_ch) in PATCHES.items():
     for ch in range(n_ch):
         buffer_names.append(f"{stem}_ch{ch}")
 
@@ -105,12 +150,13 @@ connect(route_top, 1, route_buf, 0)
 x0, y0 = 20, 300
 col_w, row_h = 260, 130
 chan_idx = 0
-for i, (stem, n_ch) in enumerate(PATCHES.items()):
+for i, (stem, (src, n_ch)) in enumerate(PATCHES.items()):
     col, row = i % 4, i // 4
     x, y = x0 + col * col_w, y0 + row * row_h
     gen_id = add_box(
-        "newobj", f"gen~ @gen {stem}.genexpr",
+        "newobj", f"gen~ @title {stem}",
         x, y, 220, 22, 1, n_ch, ["signal"] * n_ch,
+        extra={"patcher": gen_subpatcher(src, n_ch)},
     )
     for ch in range(n_ch):
         name = f"{stem}_ch{ch}"
@@ -143,21 +189,7 @@ patcher = {
     }
 }
 
-repo = Path(__file__).resolve().parent.parent
-render_dir = repo / "conformance" / "render"
-patches_dir = repo / "conformance" / "patches"
-
-# Copy patch sources next to the host so @gen resolves via the patcher's own
-# folder (no Max File Preferences setup needed).
-srcs = sorted(patches_dir.glob("*.genexpr"))
-assert {p.stem for p in srcs} == set(PATCHES), (
-    f"PATCHES map out of sync with {patches_dir}: "
-    f"{sorted(set(PATCHES) ^ {p.stem for p in srcs})}"
-)
-for src in srcs:
-    shutil.copy2(src, render_dir / src.name)
-print(f"copied {len(srcs)} .genexpr files into {render_dir}")
-
+render_dir = REPO / "conformance" / "render"
 out = render_dir / "render_host.maxpat"
 out.write_text(json.dumps(patcher, indent=1) + "\n")
 print(f"wrote {out} ({len(boxes)} boxes, {len(lines)} lines, {len(buffer_names)} channels)")
