@@ -96,6 +96,7 @@ fn fixture_every_fixture_loads_and_renders() {
         ("history_named_e2e", include_str!("fixtures/history_named_e2e.gendsp")),
         ("abs_fn", include_str!("fixtures/abs_fn.gendsp")),
         ("mr", include_str!("fixtures/mr.gendsp")),
+        ("multi_cord_inlet", include_str!("fixtures/multi_cord_inlet.gendsp")),
     ];
     for (name, content) in fixtures {
         let j = json::parse(content)
@@ -166,6 +167,32 @@ fn fixture_mc_channel_constant_one() {
     let graph = build::build_graph(&patcher, &Registry::core()).unwrap();
     let out = render_graph_with_inputs(&graph, 48000.0, &[&[0.0]], 1);
     assert_eq!(out.ch(0), &[1.0]);
+}
+
+/// multi_cord_inlet: two f boxes sum at + inlet 0 → f2 + f3 + arg10 = 15.
+#[test]
+fn fixture_multi_cord_inlet_sums() {
+    let content = include_str!("fixtures/multi_cord_inlet.gendsp");
+    let j = json::parse(content).unwrap();
+    let patcher = model::Patcher::from_json(&j).unwrap();
+    let graph = build::build_graph(&patcher, &Registry::core()).unwrap();
+    let out = render_graph_with_inputs(&graph, 48000.0, &[&[0.0]], 1);
+    assert_eq!(out.ch(0), &[15.0]); // 2 + 3 + 10
+}
+
+/// multi_cord_inlet through load_gendsp (flatten.rs path).
+#[test]
+fn load_gendsp_multi_cord_inlet_sums() {
+    let dir = std::env::temp_dir().join("opengen_test_multicord_load");
+    let _ = std::fs::create_dir_all(&dir);
+    let content = include_str!("fixtures/multi_cord_inlet.gendsp");
+    let path = dir.join("test.gendsp");
+    std::fs::write(&path, content).unwrap();
+    let opts = opengen_gendsp::LoadOptions::default();
+    let graph = opengen_gendsp::load_gendsp(&path, &opts).unwrap();
+    let out = opengen_testkit::render_graph_with_inputs(&graph, 48000.0, &[&[0.0]], 1);
+    assert_eq!(out.ch(0)[0], 15.0);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// history_named_e2e: named history h1 — compile_with_probes succeeds.

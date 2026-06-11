@@ -327,6 +327,9 @@ impl<'a> BuildCtx<'a> {
     }
 
     /// Phase 2: Wire edges from lines.
+    ///
+    /// Handles gen~'s signal summation semantics: multiple patch cords to the same
+    /// inlet are summed (like gen~, which implicitly adds sources at each inlet).
     fn wire_lines(&mut self, lines: &[Line]) -> Result<(), String> {
         for line in lines {
             let (src_id, src_idx) = &line.src;
@@ -335,16 +338,26 @@ impl<'a> BuildCtx<'a> {
             // Find source port
             let src_port = self.get_box_outlet_port(src_id, *src_idx)?;
 
-            // Check for delay box special inlet wiring
-            if let Some(&write_node) = self.delay_writes.get(dst_id) {
+            // Determine the real destination node (delay boxes redirect inlet 0)
+            let (_dst_node, dst_port) = if let Some(&write_node) = self.delay_writes.get(dst_id) {
                 // Delay box: inlet 0 (signal) → delay_write.in0, inlet 1 (tap) → delay_read.in0
                 let real_node = if *dst_idx == 0 { write_node } else { self.get_box_node_id(dst_id)? };
-                let dst_port = Port { node: real_node, index: 0 };
-                self.graph.connect(src_port, dst_port);
+                (real_node, Port { node: real_node, index: 0 })
             } else {
-                // Find destination: the box's node_id + inlet
-                let dst_node = self.get_box_node_id(dst_id)?;
-                let dst_port = Port { node: dst_node, index: *dst_idx };
+                let node = self.get_box_node_id(dst_id)?;
+                (node, Port { node, index: *dst_idx })
+            };
+
+            // Check for existing connection to this inlet.
+            // gen~ sums multiple signals at the same inlet — insert an ADD node.
+            if let Some(existing_src) = self.graph.input_of(dst_port) {
+                let op_def = self.registry.get("add")
+                    .ok_or_else(|| "'add' not registered".to_string())?;
+                let add_id = self.graph.add_node(Node::op("add", vec![], op_def.state));
+                self.graph.connect(existing_src, Port { node: add_id, index: 0 });
+                self.graph.connect(src_port, Port { node: add_id, index: 1 });
+                self.graph.connect(Port { node: add_id, index: 0 }, dst_port);
+            } else {
                 self.graph.connect(src_port, dst_port);
             }
 

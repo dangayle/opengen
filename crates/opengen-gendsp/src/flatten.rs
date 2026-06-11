@@ -20,7 +20,8 @@ use std::rc::Rc;
 
 use crate::build;
 use crate::model::Patcher;
-use opengen_ir::{Graph, Node, NodeId, Port};
+use opengen_genexpr::Expr;
+use opengen_ir::{Graph, Node, NodeId, Port, StateDecl};
 use opengen_ops::Registry;
 
 // ---------------------------------------------------------------------------
@@ -270,6 +271,11 @@ fn build_graph_from_patcher(
         if bx.maxclass == "codebox" {
             let id = host_graph.add_node(Node::constant(0.0));
             out_ports.entry(bx.id.clone()).or_default().push((0, Port { node: id, index: 0 }));
+            // Create placeholder outlets for all codebox outlets (Phase 7 replaces them)
+            for outlet_idx in 1..bx.numoutlets {
+                let const_id = host_graph.add_node(Node::constant(0.0));
+                out_ports.entry(bx.id.clone()).or_default().push((outlet_idx, Port { node: const_id, index: 0 }));
+            }
             box_node_ids.insert(bx.id.clone(), (id, bx.numinlets));
             box_infos.insert(bx.id.clone(), (bx.numinlets, vec![false; bx.numinlets as usize], Vec::new()));
             continue;
@@ -441,6 +447,11 @@ fn build_graph_from_patcher(
     }
 
     // ── Phase 2: Wire lines ──────────────────────────────────────
+    //
+    // In gen~, multiple signals can connect to the same inlet of a box;
+    // they are summed ("multi-hot" inlets). Since our Graph edges map
+    // each destination port to a single source, we detect when a port
+    // already has a connection and insert an add node to sum them.
     for line in &patcher.lines {
         let (src_id, src_idx) = &line.src;
         let (dst_id, dst_idx) = &line.dst;
@@ -456,11 +467,36 @@ fn build_graph_from_patcher(
                 box_node_ids.get(dst_id).map(|(id, _)| *id)
                     .ok_or_else(|| GendspError::Build(format!("unknown box '{}'", dst_id)))?
             };
-            host_graph.connect(src_port, Port { node: real_node, index: 0 });
+            let dst_port = Port { node: real_node, index: 0 };
+            // Multi-hot check for delay write nodes
+            if host_graph.input_of(dst_port).is_some() {
+                let op_def = registry.get("add")
+                    .ok_or_else(|| GendspError::Build("add not registered — needed for multi-hot".to_string()))?;
+                let add_id = host_graph.add_node(Node::op("add", vec![], op_def.state));
+                let existing = host_graph.input_of(dst_port).unwrap();
+                host_graph.connect(existing, Port { node: add_id, index: 0 });
+                host_graph.connect(src_port, Port { node: add_id, index: 1 });
+                host_graph.connect(Port { node: add_id, index: 0 }, dst_port);
+            } else {
+                host_graph.connect(src_port, dst_port);
+            }
         } else {
             let dst_node = box_node_ids.get(dst_id)
                 .ok_or_else(|| GendspError::Build(format!("unknown box '{}'", dst_id)))?;
-            host_graph.connect(src_port, Port { node: dst_node.0, index: *dst_idx });
+            let dst_port = Port { node: dst_node.0, index: *dst_idx };
+            // Multi-hot check: if this destination already has an incoming edge,
+            // insert an add node instead of overwriting.
+            if host_graph.input_of(dst_port).is_some() {
+                let op_def = registry.get("add")
+                    .ok_or_else(|| GendspError::Build("add not registered — needed for multi-hot".to_string()))?;
+                let add_id = host_graph.add_node(Node::op("add", vec![], op_def.state));
+                let existing = host_graph.input_of(dst_port).unwrap();
+                host_graph.connect(existing, Port { node: add_id, index: 0 });
+                host_graph.connect(src_port, Port { node: add_id, index: 1 });
+                host_graph.connect(Port { node: add_id, index: 0 }, dst_port);
+            } else {
+                host_graph.connect(src_port, dst_port);
+            }
         }
 
         // Track wired inlet
@@ -500,22 +536,19 @@ fn build_graph_from_patcher(
             for (i, expr_text) in expr_args.iter().enumerate() {
                 let inlet = arity as u16 - 1 - (total_args - 1 - total_numeric - i) as u16;
 
-                // Resolve expression arg — could be param name or literal expression
-                let port = if let Some(&pp) = param_ports.get(expr_text) {
-                    pp
-                } else if let Some(val) = build::resolve_builtin(expr_text) {
-                    let id = host_graph.add_node(Node::constant(val));
-                    Port { node: id, index: 0 }
-                } else if expr_text == "samplerate" {
-                    let id = host_graph.add_node(Node::op("samplerate", vec![], opengen_ir::StateDecl::None));
-                    Port { node: id, index: 0 }
-                } else if let Ok(v) = expr_text.parse::<f64>() {
-                    let id = host_graph.add_node(Node::constant(v));
-                    Port { node: id, index: 0 }
-                } else {
-                    return Err(GendspError::Build(format!(
-                        "could not resolve box expression arg '{}' in box '{}'", expr_text, bx.id
-                    )));
+                // Resolve expression arg — could be param name, builtin, samplerate,
+                // numeric literal, or a GenExpr expression (e.g. "twopi/samplerate").
+                let port = match resolve_simple_expr(expr_text, &param_ports, registry, host_graph) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        // Try parsing as a GenExpr expression
+                        match parse_expression_and_lower(expr_text, &param_ports, registry, host_graph) {
+                            Ok(p) => p,
+                            Err(e) => return Err(GendspError::Build(format!(
+                                "could not resolve box expression arg '{}' in box '{}': {}", expr_text, bx.id, e
+                            ))),
+                        }
+                    }
                 };
                 host_graph.connect(port, Port { node: node_id, index: inlet });
             }
@@ -1237,6 +1270,150 @@ impl opengen_genexpr::AbstractionResolver for GendspAbstractionResolver {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Expression argument helpers
+// ---------------------------------------------------------------------------
+
+/// Resolve a simple expression arg (param lookup, builtin, samplerate, numeric literal).
+fn resolve_simple_expr(
+    expr_text: &str,
+    param_ports: &HashMap<String, Port>,
+    _registry: &Registry,
+    graph: &mut Graph,
+) -> Result<Port, String> {
+    if let Some(&pp) = param_ports.get(expr_text) {
+        return Ok(pp);
+    }
+    if let Some(val) = build::resolve_builtin(expr_text) {
+        let id = graph.add_node(Node::constant(val));
+        return Ok(Port { node: id, index: 0 });
+    }
+    if expr_text == "samplerate" {
+        let id = graph.add_node(Node::op("samplerate", vec![], StateDecl::None));
+        return Ok(Port { node: id, index: 0 });
+    }
+    if let Ok(v) = expr_text.parse::<f64>() {
+        let id = graph.add_node(Node::constant(v));
+        return Ok(Port { node: id, index: 0 });
+    }
+    Err(format!("cannot resolve '{}' as simple expression", expr_text))
+}
+
+/// Parse an expression arg as a GenExpr expression and lower it into the graph.
+fn parse_expression_and_lower(
+    expr_text: &str,
+    param_ports: &HashMap<String, Port>,
+    registry: &Registry,
+    graph: &mut Graph,
+) -> Result<Port, String> {
+    use opengen_genexpr::parse_expression;
+    let expr = parse_expression(expr_text)
+        .map_err(|e| format!("cannot parse expression arg '{}': {}", expr_text, e))?;
+    lower_expr(expr, param_ports, registry, graph)
+}
+
+/// Lower a GenExpr expression tree into the graph, returning the output port.
+fn lower_expr(
+    expr: Expr,
+    param_ports: &HashMap<String, Port>,
+    registry: &Registry,
+    graph: &mut Graph,
+) -> Result<Port, String> {
+    match expr {
+        Expr::Number(n) => {
+            let id = graph.add_node(Node::constant(n));
+            Ok(Port { node: id, index: 0 })
+        }
+        Expr::Ident(name) => {
+            if let Some(&p) = param_ports.get(&name) {
+                return Ok(p);
+            }
+            if let Some(val) = build::resolve_builtin(&name) {
+                let id = graph.add_node(Node::constant(val));
+                return Ok(Port { node: id, index: 0 });
+            }
+            if name == "samplerate" {
+                let id = graph.add_node(Node::op("samplerate", vec![], StateDecl::None));
+                return Ok(Port { node: id, index: 0 });
+            }
+            // Check inN references
+            if let Some(in_idx) = parse_input_name_within(&name) {
+                let id = graph.add_node(Node::input(in_idx));
+                return Ok(Port { node: id, index: 0 });
+            }
+            Err(format!("undefined identifier in expression arg: '{}'", name))
+        }
+        Expr::BinOp { op, left, right } => {
+            let op_name = op.op_name();
+            let left_port = lower_expr(*left, param_ports, registry, graph)?;
+            let right_port = lower_expr(*right, param_ports, registry, graph)?;
+            let op_def = registry.get(op_name)
+                .ok_or_else(|| format!("unknown operator '{}' in expression", op_name))?;
+            let id = graph.add_node(Node::op(op_name, vec![], op_def.state));
+            graph.connect(left_port, Port { node: id, index: 0 });
+            graph.connect(right_port, Port { node: id, index: 1 });
+            Ok(Port { node: id, index: 0 })
+        }
+        Expr::Unary(op, e) => {
+            let op_name = match op {
+                opengen_genexpr::UnaryOp::Neg => "sub",
+                opengen_genexpr::UnaryOp::Not => "not",
+            };
+            let arg_port = lower_expr(*e, param_ports, registry, graph)?;
+            if op_name == "sub" {
+                // 0 - arg
+                let zero_id = graph.add_node(Node::constant(0.0));
+                let op_def = registry.get("sub")
+                    .ok_or_else(|| "'sub' not registered".to_string())?;
+                let id = graph.add_node(Node::op("sub", vec![], op_def.state));
+                graph.connect(Port { node: zero_id, index: 0 }, Port { node: id, index: 0 });
+                graph.connect(arg_port, Port { node: id, index: 1 });
+                Ok(Port { node: id, index: 0 })
+            } else {
+                // not
+                let op_def = registry.get("not")
+                    .ok_or_else(|| "'not' not registered".to_string())?;
+                let id = graph.add_node(Node::op("not", vec![], op_def.state));
+                graph.connect(arg_port, Port { node: id, index: 0 });
+                Ok(Port { node: id, index: 0 })
+            }
+        }
+        Expr::Call { name, args, .. } => {
+            let op_def = registry.get(&name)
+                .ok_or_else(|| format!("unknown function '{}' in expression", name))?;
+            let id = graph.add_node(Node::op(&name, vec![], op_def.state));
+            for (i, arg) in args.iter().enumerate() {
+                let arg_port = lower_expr(arg.clone(), param_ports, registry, graph)?;
+                graph.connect(arg_port, Port { node: id, index: i as u16 });
+            }
+            Ok(Port { node: id, index: 0 })
+        }
+        Expr::Ternary { cond, true_expr, false_expr } => {
+            let cond_port = lower_expr(*cond, param_ports, registry, graph)?;
+            let true_port = lower_expr(*true_expr, param_ports, registry, graph)?;
+            let false_port = lower_expr(*false_expr, param_ports, registry, graph)?;
+            let op_def = registry.get("switch")
+                .ok_or_else(|| "'switch' not registered".to_string())?;
+            let id = graph.add_node(Node::op("switch", vec![], op_def.state));
+            graph.connect(cond_port, Port { node: id, index: 0 });
+            graph.connect(true_port, Port { node: id, index: 1 });
+            graph.connect(false_port, Port { node: id, index: 2 });
+            Ok(Port { node: id, index: 0 })
+        }
+        Expr::Str(_) => Err("string literal in expression arg not supported".to_string()),
+        Expr::MemberCall { .. } => Err("member calls in expression args not supported".to_string()),
+    }
+}
+
+/// Parse "inN" to input index (0-based). Returns None if not an "inN" pattern.
+fn parse_input_name_within(name: &str) -> Option<u16> {
+    if name.starts_with("in") {
+        name[2..].parse::<u16>().ok().map(|n| n.saturating_sub(1))
+    } else {
+        None
+    }
+}
 
 #[cfg(test)]
 mod tests {
