@@ -9,7 +9,12 @@ their rustdoc:
 - **`phasor`** — increment-order / wrap semantics (`conformance/patches/phasor_incr_order.genexpr`)
 - **`range_inverted_bounds`** — clip inverse-pin / wrap-fold-swap (`conformance/patches/range_inverted_bounds.genexpr`)
 
-## Pending probe: gen_resonator silence (vendor sign bug)
+## ~~Pending~~ CONFIRMED probe: gen_resonator silence (vendor sign bug)
+
+**Confirmed in real Max gen~ 2026-06-10:** as shipped → silence; with obj-30
+changed to `* -0.5` → definite 440 Hz peak, peakamp ≈ 1 (noise-driven).
+opengen's semantics match real gen~ on this patch. Remaining action: submit
+the bug report to Cycling '74 (draft in the research doc).
 
 opengen root-caused a sign bug in the shipped `gen_resonator.gendsp` example
 (obj-30 `* 0.5` should be `* -0.5`; full analysis in

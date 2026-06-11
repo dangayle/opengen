@@ -1,8 +1,11 @@
 # gen_resonator.gendsp: sign bug in the b-coefficient pole-radius branch
 
 **Status:** root-caused 2026-06-10 against opengen's deterministic engine;
-pending report to Cycling '74 and human verification in real Max
-(see `conformance/CHECKLIST.md`, "gen_resonator silence probe").
+**confirmed in real Max gen~ 2026-06-10** (human probe): as shipped, the
+example outputs silence for the drive values below; with obj-30 changed to
+`* -0.5` it resonates with a definite spectral peak at 440 Hz and peak
+amplitude fluctuating around 1 under noise excitation — matching opengen's
+predictions exactly. Pending: report to Cycling '74 (draft below).
 
 **File:** `reference/gen/examples/gen_resonator.gendsp` (shipped Max example,
 used by `gen~.resonator_bank_v2.maxpat`; credited to Graham Wakefield). Cited
@@ -58,6 +61,9 @@ can also go fully silent: threshold f ≈ 389 Hz at bw = 1.3e-3, 48 kHz).
 - Sign-fixed copy (in memory): impulse ringdown FFT peaks at **439.5 Hz**
   for a 440 Hz drive (32768-point FFT @ 48 kHz, bin spacing 1.46 Hz),
   stable, `a = 0.0033`.
+- **Max confirmation (2026-06-10):** real gen~, patch driven per
+  `conformance/CHECKLIST.md`: shipped → silence; sign-fixed → definite
+  440 Hz peak, peakamp ≈ 1. Both opengen predictions confirmed.
 - Regression tests:
   `exit_resonator_vendor_sign_bug_renders_silence` (faithful emulation,
   exact-zero assertion + upstream-fix tripwire on obj-30's text) and
