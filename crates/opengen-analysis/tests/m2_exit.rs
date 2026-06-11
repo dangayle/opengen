@@ -5,7 +5,10 @@
 //! **Deep assertions** (PRIMARY — Wakefield/official reference examples):
 //! - `exit_crossover_complementary_response` — LR crossover shelf; lo/hi individual bands + sum
 //! - `exit_freeverb_impulse_tail` — Freeverb reverb tank (comb + allpass chain)
-//! - `exit_resonator_peaks_at_drive_freq` — Two-pole resonator with voice ID, amp, freq, BW
+//! - `exit_resonator_vendor_sign_bug_renders_silence` — Two-pole resonator: faithful
+//!   emulation of the shipped patch's sign bug (exact silence for bw = 0.005)
+//! - `exit_resonator_sign_fixed_peaks_at_drive_freq` — Same patch with obj-30
+//!   sign-fixed in memory: impulse ringdown peaks within 10 Hz of 440
 //!
 //! **Stress + smoke** (skip-if-missing):
 //! - `exit_dattorro_plate_stress` — dang-tools hardest single patch (Delay multi-tap + declarator lists)
@@ -194,48 +197,115 @@ fn exit_freeverb_impulse_tail() {
     );
 }
 
-#[ignore = "BLOCKED: loaded gen_resonator renders all-zero output despite every constituent stage verifying correct in isolation (latch/?/slide w/ corpus numinlets, named history, 2&3-way multi-cord summation, param-name args, feedback core all PASS via load path in mini-fixtures). Orchestrator bisection 2026-06-10; needs graph-dump comparison of the full loaded patch. Do not release M2 with this ignored without explicit sign-off."]
-#[test]
-fn exit_resonator_peaks_at_drive_freq() {
+// ── gen_resonator: vendor sign bug (root-caused 2026-06-10) ──────────────────
+//
+// The shipped example computes its two pole-radius branches INCONSISTENTLY:
+//   c-branch (obj-45 `* -1` → obj-17 `exp` → obj-18 `* -1`): c = −e^(−bw) = −r²
+//   b-branch (obj-30 `* 0.5` → obj-46 `exp`):                 b = 2·cosω·e^(+bw/2)
+// A canonical two-pole needs b = 2·cosω·e^(−bw/2). Consequences (poles of
+// y = a·x + b·y1 + c·y2 satisfy z² − bz − c = 0, cosθ = b/2R, R² = −c):
+//   • as shipped: cosθ = cosω·e^(+bw) — detuned flat; and for
+//     bw > ~(2−2cosω)/(1+cosω) the input coefficient a = 1 − min(b − r², 1)
+//     clamps to exactly 0, so the filter receives NO input and outputs silence.
+//   • sign-fixed (obj-30 = `* -0.5`): cosθ = cosω exactly — tuned to ω for
+//     ANY bw — clearly the design intent.
+// The host example (gen~.resonator_bank_v2.maxpat codebox) only drives
+// bw ∈ [6.5e-5, 1.3e-3], below the silence threshold, which is why the bug
+// ships unnoticed. Full analysis: docs/research/gen_resonator_sign_bug.md.
+// Conformance probe (real Max should also go silent): conformance/CHECKLIST.md.
+
+const RESONATOR_VENDOR_BUG_TEXT: &str = r#""text" : "* 0.5""#;
+const RESONATOR_FIXED_TEXT: &str = r#""text" : "* -0.5""#;
+
+fn resonator_bytes() -> Vec<u8> {
     let root = reference_dir().expect("reference/ directory not found");
     let path = root.join("gen/examples/gen_resonator.gendsp");
     assert!(path.exists(), "gen_resonator.gendsp not found at {}", path.display());
+    std::fs::read(&path).expect("read gen_resonator.gendsp")
+}
 
-    let graph = opengen_gendsp::load_gendsp(&path, &opengen_gendsp::LoadOptions::default())
-        .expect("load gen_resonator.gendsp");
+/// Drive signals for the resonator: (in1 excitation, in2 voice, in3 ω, in4 amp, in5 bw).
+/// `in 3 freq` flows through the voice latch (?/history/slide) DIRECTLY into
+/// `cos` — no 2π/sr scaling inside the patch — so in3 expects NORMALIZED
+/// RADIAN frequency ω = 2π·f/sr, not Hz. `in 5 bw` sets r² = e^(−bw).
+fn resonator_render(graph: &opengen_ir::Graph, in1: &[f64], sr: f64) -> Vec<f64> {
+    let n = in1.len();
+    let omega = std::f64::consts::TAU * 440.0 / sr;
+    let in2 = vec![0.0; n];        // voice index 0 (matches param id 0)
+    let in3 = vec![omega; n];      // ω for 440 Hz
+    let in4 = vec![1.0; n];        // amp
+    let in5 = vec![0.005; n];      // r² = e^-0.005 — sharp peak, ~38 Hz wide
+    let out = opengen_testkit::render_graph_with_inputs(
+        graph, sr, &[in1, &in2, &in3, &in4, &in5], n,
+    );
+    out.ch(0).to_vec()
+}
+
+/// Faithful emulation of the SHIPPED patch: with bw = 0.005 (above the
+/// silence threshold ≈ 0.00166 at ω for 440 Hz) the input coefficient is
+/// exactly 0 and the output is exactly silent. This pins our engine to the
+/// vendor patch's real behavior, sign bug included.
+#[test]
+fn exit_resonator_vendor_sign_bug_renders_silence() {
+    let bytes = resonator_bytes();
+
+    // Tripwire: if Cycling '74 ever fixes obj-30 upstream, this fails and the
+    // 440 Hz assertion below should be re-aimed at the unmodified patch.
+    let txt = String::from_utf8_lossy(&bytes);
+    assert_eq!(
+        txt.matches(RESONATOR_VENDOR_BUG_TEXT).count(), 1,
+        "obj-30 no longer says `* 0.5` — upstream patch changed; re-evaluate \
+         exit_resonator_sign_fixed_peaks_at_drive_freq against the vendor file"
+    );
+
+    let graph = opengen_gendsp::parse_gendsp_bytes(
+        &bytes, None, &opengen_gendsp::LoadOptions::default(),
+    ).expect("load gen_resonator.gendsp");
 
     let sr = 48_000.0;
     let n = sr as usize; // 1 second
-
-    // Patch input contract (verified by tracing patchlines): `in 3 freq` flows
-    // through the voice latch (?/history/slide) DIRECTLY into `cos` — there is
-    // no 2π/sr scaling inside the patch, so in3 expects NORMALIZED RADIAN
-    // frequency ω = 2π·f/sr, not Hz. Similarly `in 5 bw` flows through
-    // `* -1 → exp`, i.e. r = e^(−bw): small bw → r near 1 → sharp resonance.
-    let omega = std::f64::consts::TAU * 440.0 / sr;
-
-    // White noise excitation (slides settle in ~200 samples; noise keeps
-    // driving the resonator for the whole render).
+    // White noise excitation — drives the filter the whole render.
     let mut in1 = vec![0.0; n];
     let mut rng: u64 = 0x0123456789ABCDEF;
     for sample in in1.iter_mut() {
         rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         *sample = ((rng >> 11) as f64) / (1u64 << 53) as f64 * 2.0 - 1.0;
     }
-    let in2 = vec![0.0; n];        // voice index 0 (matches param id 0)
-    let in3 = vec![omega; n];      // ω for 440 Hz
-    let in4 = vec![1.0; n];        // amp
-    let in5 = vec![0.005; n];      // r = e^-0.005 ≈ 0.995 — sharp peak
-
-    let out = opengen_testkit::render_graph_with_inputs(
-        &graph, sr, &[&in1, &in2, &in3, &in4, &in5], n,
+    let out = resonator_render(&graph, &in1, sr);
+    assert!(
+        out.iter().all(|&x| x == 0.0),
+        "shipped gen_resonator should render exact silence for bw = 0.005 \
+         (a ≡ 0); got nonzero output — did the loader or an op change?"
     );
-    opengen_analysis::assert_stable!(out.ch(0));
+}
 
-    // FFT over the last 32768 samples (slides fully settled).
-    let fft_len = 32768usize;
-    let start = n - fft_len;
-    let mut buffer: Vec<Complex<f64>> = out.ch(0)[start..]
+/// The sign-FIXED resonator (obj-30 `* 0.5` → `* -0.5`, patched in memory —
+/// reference/ is never modified) peaks within 10 Hz of the 440 Hz drive.
+/// Excitation is a unit impulse after slide settling: deterministic, unlike a
+/// single-realization noise periodogram whose peak-bin variance is comparable
+/// to the 38 Hz resonance width.
+#[test]
+fn exit_resonator_sign_fixed_peaks_at_drive_freq() {
+    let bytes = resonator_bytes();
+    let fixed = String::from_utf8(bytes).expect("utf8")
+        .replacen(RESONATOR_VENDOR_BUG_TEXT, RESONATOR_FIXED_TEXT, 1);
+    assert!(fixed.contains(RESONATOR_FIXED_TEXT), "in-memory sign fix applied");
+
+    let graph = opengen_gendsp::parse_gendsp_bytes(
+        fixed.as_bytes(), None, &opengen_gendsp::LoadOptions::default(),
+    ).expect("load sign-fixed gen_resonator");
+
+    let sr = 48_000.0;
+    let settle = 5_000usize; // slides (200/200) fully converged
+    let fft_len = 32_768usize;
+    let n = settle + fft_len;
+    let mut in1 = vec![0.0; n];
+    in1[settle] = 1.0; // unit impulse once params are settled
+    let out = resonator_render(&graph, &in1, sr);
+    opengen_analysis::assert_stable!(&out);
+
+    // FFT of the deterministic ringdown.
+    let mut buffer: Vec<Complex<f64>> = out[settle..]
         .iter()
         .map(|&x| Complex::new(x, 0.0))
         .collect();
