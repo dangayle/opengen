@@ -17,8 +17,12 @@ named external buffer~ at index `elapsed`. Provenance for the mechanism
     patcher (corpus idiom, e.g. gen~.resonator_bank_v2.maxpat).
 
 node.script sizes the buffers to exactly 4096 samples (`sizeinsamps`) and
-writes float32 WAVs (`writewave <path> float32` — int16 would both quantize
-below the comparator's 1e-6 tolerance and clip counter values > 1.0).
+exports float32: buffer~'s WAV writers are int16-only, so the runner uses
+`writeraw <path> float32 4096 1` (the ONLY format-controllable write, per
+the buffer~ reference) and assembles the float32 WAV header itself in Node.
+Poke channel arguments are ZERO-based (gen_dsp_poke.maxref) — channel 1 on
+a mono buffer is silently ignored (channelmode ignore), which produced the
+all-zero first capture.
 
 Human flow: open patch -> DSP ON ~1s -> DSP OFF -> [writewavs].
 Re-run: close and reopen the patch first (fresh gen~ state).
@@ -112,7 +116,7 @@ def gen_subpatcher(stem, src, n_out):
         gboxes.append({"box": {
             "id": f"pk-{k}",
             "maxclass": "newobj",
-            "text": f"poke {name} 1",
+            "text": f"poke {name} 0",  # channel is ZERO-based (gen_dsp_poke.maxref)
             "numinlets": 2,
             "numoutlets": 0,
             "patching_rect": [x, 400.0, 150.0, 22.0],

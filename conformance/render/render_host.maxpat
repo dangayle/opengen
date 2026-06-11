@@ -246,7 +246,7 @@
         "box": {
          "id": "pk-0",
          "maxclass": "newobj",
-         "text": "poke cycle_440_ch0 1",
+         "text": "poke cycle_440_ch0 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -424,7 +424,7 @@
         "box": {
          "id": "pk-0",
          "maxclass": "newobj",
-         "text": "poke dcblock_step_ch0 1",
+         "text": "poke dcblock_step_ch0 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -606,7 +606,7 @@
         "box": {
          "id": "pk-0",
          "maxclass": "newobj",
-         "text": "poke delay_echo_ch0 1",
+         "text": "poke delay_echo_ch0 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -655,7 +655,7 @@
         "box": {
          "id": "pk-1",
          "maxclass": "newobj",
-         "text": "poke delay_echo_ch1 1",
+         "text": "poke delay_echo_ch1 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -704,7 +704,7 @@
         "box": {
          "id": "pk-2",
          "maxclass": "newobj",
-         "text": "poke delay_echo_ch2 1",
+         "text": "poke delay_echo_ch2 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -992,7 +992,7 @@
         "box": {
          "id": "pk-0",
          "maxclass": "newobj",
-         "text": "poke history_counter_ch0 1",
+         "text": "poke history_counter_ch0 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -1041,7 +1041,7 @@
         "box": {
          "id": "pk-1",
          "maxclass": "newobj",
-         "text": "poke history_counter_ch1 1",
+         "text": "poke history_counter_ch1 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -1273,7 +1273,7 @@
         "box": {
          "id": "pk-0",
          "maxclass": "newobj",
-         "text": "poke phasor_incr_order_ch0 1",
+         "text": "poke phasor_incr_order_ch0 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -1455,7 +1455,7 @@
         "box": {
          "id": "pk-0",
          "maxclass": "newobj",
-         "text": "poke range_inverted_bounds_ch0 1",
+         "text": "poke range_inverted_bounds_ch0 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -1504,7 +1504,7 @@
         "box": {
          "id": "pk-1",
          "maxclass": "newobj",
-         "text": "poke range_inverted_bounds_ch1 1",
+         "text": "poke range_inverted_bounds_ch1 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -1553,7 +1553,7 @@
         "box": {
          "id": "pk-2",
          "maxclass": "newobj",
-         "text": "poke range_inverted_bounds_ch2 1",
+         "text": "poke range_inverted_bounds_ch2 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -1841,7 +1841,7 @@
         "box": {
          "id": "pk-0",
          "maxclass": "newobj",
-         "text": "poke sah_latch_ch0 1",
+         "text": "poke sah_latch_ch0 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -1890,7 +1890,7 @@
         "box": {
          "id": "pk-1",
          "maxclass": "newobj",
-         "text": "poke sah_latch_ch1 1",
+         "text": "poke sah_latch_ch1 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -2122,7 +2122,7 @@
         "box": {
          "id": "pk-0",
          "maxclass": "newobj",
-         "text": "poke slide_step_ch0 1",
+         "text": "poke slide_step_ch0 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -2304,7 +2304,7 @@
         "box": {
          "id": "pk-0",
          "maxclass": "newobj",
-         "text": "poke triangle_duty_ch0 1",
+         "text": "poke triangle_duty_ch0 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -2353,7 +2353,7 @@
         "box": {
          "id": "pk-1",
          "maxclass": "newobj",
-         "text": "poke triangle_duty_ch1 1",
+         "text": "poke triangle_duty_ch1 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [
@@ -2402,7 +2402,7 @@
         "box": {
          "id": "pk-2",
          "maxclass": "newobj",
-         "text": "poke triangle_duty_ch2 1",
+         "text": "poke triangle_duty_ch2 0",
          "numinlets": 2,
          "numoutlets": 0,
          "patching_rect": [

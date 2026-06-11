@@ -53,8 +53,11 @@ Also report the patch bug to Cycling '74 (draft text in the research doc).
 > its named buffer~ at index `elapsed` (samples since DSP began — the same
 > t=0 as codebox History state, so alignment is correct by construction;
 > out-of-range pokes are ignored, so capture self-terminates at 4096).
-> WAVs are written `writewave <path> float32`. Regenerate after
-> adding/editing a patch: `python3 tools/gen_render_host.py`.
+> WAVs are exported via `writeraw <path> float32 4096 1` + a JS-assembled
+> IEEE-float header (buffer~'s WAV writers are int16-only — buffer~ maxref).
+> Poke channel args are ZERO-based; channel 1 on a mono buffer is silently
+> ignored (this produced an all-zero capture on 2026-06-11). Regenerate
+> after adding/editing a patch: `python3 tools/gen_render_host.py`.
 
 ### 1. Open Render Host
 
@@ -74,8 +77,11 @@ automatically during the first 4096 samples after DSP start.
 
 ### 3. Write the WAVs
 
-Click the `writewavs` message box. The runner sends each `buffer~`
-`writewave <abspath> float32` into `conformance/golden/` and logs each file.
+Click the `writewavs` message box. The runner has each `buffer~` write raw
+float32 to a temp file, wraps it in a WAV header, and saves
+`conformance/golden/<stem>.ch<N>.wav` — logging each file with its first
+three sample values (instant sanity check: `history_counter.ch1` should
+start `0, 1, 2`).
 
 To re-record, close and reopen the patch first (fresh gen~ state), then
 repeat from step 2.
@@ -107,11 +113,11 @@ the runner script. Common issues:
 - Node for Max not available → node.script won't start
 - File permissions → buffer~ write may fail
 
-**Bit-depth check:** the comparator's 1e-6 tolerance requires float32 WAVs
-(`writewave <path> float32`). If `cargo test` fails with uniform ~1e-5
-diffs, the float32 argument was not honored — check the Max console for
-writewave errors. (First render attempt 2026-06-11 used plain `write` →
-int16: quantized AND clipped counter channels at 1.0.)
+**Bit-depth check:** the comparator's 1e-6 tolerance requires float32 WAVs.
+The runner's `writeraw float32` + JS WAV assembly guarantees this; if
+`cargo test` fails with uniform ~1e-5 diffs something regressed in the
+export path. (History: `write`/`writewave` are int16-only — quantized AND
+clipped counter channels at 1.0 on the first render attempts, 2026-06-11.)
 
 **Alignment check is automatic:** `history_counter.ch1` must read 0,1,2,…
 and `cycle`/`phasor` must start at exactly 0. v4's poke-at-elapsed capture
