@@ -12,3 +12,8 @@ opengen-testkit.workspace = true
 rustfft = "6"
 hound = "3"
 plotters = { version = "0.3", default-features = false, features = ["svg_backend", "line_series"] }
+
+[dev-dependencies]
+opengen-gendsp.workspace = true
+opengen-compile.workspace = true
+opengen-ir.workspace = true
