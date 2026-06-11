@@ -9,6 +9,22 @@ their rustdoc:
 - **`phasor`** — increment-order / wrap semantics (`conformance/patches/phasor_incr_order.genexpr`)
 - **`range_inverted_bounds`** — clip inverse-pin / wrap-fold-swap (`conformance/patches/range_inverted_bounds.genexpr`)
 
+## Pending probe: gen_resonator silence (vendor sign bug)
+
+opengen root-caused a sign bug in the shipped `gen_resonator.gendsp` example
+(obj-30 `* 0.5` should be `* -0.5`; full analysis in
+`docs/research/gen_resonator_sign_bug.md`). Prediction: **real gen~ also
+outputs exact silence** when the patch is driven with in2 = 0, in3 = ω for
+440 Hz (≈ 0.0576 rad @ 48 kHz), in4 = 1, in5 = 0.005, and any in1
+excitation — because the input coefficient `a` clamps to 0.
+
+Human step: load `gen_resonator.gendsp` in a gen~ host in Max, drive the
+inputs with those constants plus noise on in1, and confirm silence. If Max
+is NOT silent, our `?`/`min`/`!-`/multi-cord-summation semantics diverge
+somewhere — file an opengen bug and re-open the resonator investigation
+(`exit_resonator_vendor_sign_bug_renders_silence` pins current behavior).
+Also report the patch bug to Cycling '74 (draft text in the research doc).
+
 ---
 
 ## Prerequisites
