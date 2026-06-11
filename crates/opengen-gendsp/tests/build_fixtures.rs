@@ -215,6 +215,29 @@ fn fixture_history_named_e2e() {
     assert_eq!(trace.len(), 2);
 }
 
+/// history_named_e2e through the LOAD path (parse_gendsp_bytes → flatten):
+/// named-history bindings must survive flattening so probes work on loaded
+/// patches (regression: flatten dropped `history y1` names — resonator debug).
+#[test]
+fn fixture_history_named_probeable_via_load_path() {
+    let bytes = include_bytes!("fixtures/history_named_e2e.gendsp");
+    let opts = opengen_gendsp::LoadOptions::default();
+    let graph = opengen_gendsp::parse_gendsp_bytes(bytes, None, &opts).unwrap();
+    assert!(
+        graph.binding("h1").is_some(),
+        "named history h1 must be bound in the loaded graph"
+    );
+    let mut patch = opengen_compile::compile_with_probes(
+        &graph, &Registry::core(), 48000.0, &["h1"],
+    ).expect("compile_with_probes should succeed for named history h1 via load path");
+    for &v in &[1.0, 0.0] {
+        patch.process(&[v]);
+    }
+    let trace = patch.probe("h1").unwrap();
+    assert_eq!(trace.len(), 2);
+    assert_eq!(trace[1], 1.0); // 1-sample delay of the impulse
+}
+
 // ─── Codebox abstraction-as-function tests (M2) ──────────────────────
 
 /// codebox calls abstraction `y = abs_fn(in1); out1 = y;` with abs_fn.gendsp

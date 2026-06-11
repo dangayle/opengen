@@ -360,7 +360,7 @@ fn build_graph_from_patcher(
                 box_node_ids.insert(bx.id.clone(), (id, 0));
                 receive_names.insert(bx.id.clone(), name);
             }
-            BoxKind::History(_name) => {
+            BoxKind::History(name) => {
                 let id = host_graph.add_node(Node::op(
                     "history", vec![0.0], opengen_ir::StateDecl::Slots(1),
                 ));
@@ -368,6 +368,10 @@ fn build_graph_from_patcher(
                 out_ports.entry(bx.id.clone()).or_default().push((0, port));
                 box_node_ids.insert(bx.id.clone(), (id, 1));
                 box_infos.insert(bx.id.clone(), (1, vec![false; 1], Vec::new()));
+                // Named history: bind in graph so probes can target it.
+                if let Some(n) = name {
+                    host_graph.bind(n, id);
+                }
             }
             BoxKind::Delay(size, _taps) => {
                 let data_name = format!("__delaybox_{}", bx.id);
