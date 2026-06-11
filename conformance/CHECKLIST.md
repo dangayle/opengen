@@ -47,19 +47,18 @@ Also report the patch bug to Cycling '74 (draft text in the research doc).
 > exist). v2 is fully static: one `gen~ @gen <stem>.genexpr` per patch, one
 > `record~` + `buffer~` pair per output channel (17 total). `node.script`
 > only sizes buffers and writes WAVs. Regenerate the host after adding a
-> patch: `python3 tools/gen_render_host.py`.
-
-### 0. One-time: add the patches folder to Max's search path
-
-Max → Settings/Options → File Preferences → add this repository's
-`conformance/patches/` folder. The gen~ boxes load patches by bare filename
-(`@gen cycle_440.genexpr`) via the search path.
+> patch: `python3 tools/gen_render_host.py` (it also copies the `.genexpr`
+> sources next to the host — the patcher's own folder is always in Max's
+> search path, so no File Preferences setup is needed; the copies are
+> gitignored and `conformance/patches/` stays canonical).
 
 ### 1. Open Render Host
 
 Open `conformance/render/render_host.maxpat` in Max 9 and check the Max
 console: **all 9 gen~ objects must compile with no errors**. If you see
-"can't find" errors, step 0 wasn't applied — fix and reopen.
+"could not find gen patcher" errors, the `.genexpr` copies are missing —
+run `python3 tools/gen_render_host.py` and reopen. Never save the patch
+after a failed load: Max prunes patchcords from collapsed gen~ outlets.
 
 The `node.script` autostarts (`@autostart 1`); the console should show
 `render_runner: sized 17 buffers to 4096 samples`. If not, click the
@@ -106,7 +105,7 @@ After the runner completes, verify that WAV files appear in
 
 If some files are missing, check the Max window for error messages from
 the runner script. Common issues:
-- Patches folder not in search path → gen~ boxes empty (step 0)
+- "could not find gen patcher" → rerun `python3 tools/gen_render_host.py` (copies missing)
 - Node for Max not available → node.script won't start
 - File permissions → buffer~ write may fail
 

@@ -28,7 +28,7 @@
       620,
       120
      ],
-     "text": "GenExpr Conformance Render Host (v2)\n0. One-time: Options > File Preferences > add this repo's conformance/patches folder.\n1. Reopen this patch; check Max console: all 9 gen~ must compile clean.\n2. node.script autostarts (or click [script start]); console shows buffer sizing.\n3. Click [arm] with DSP OFF.\n4. Turn DSP ON (ezdac~), wait 1 second, turn DSP OFF.\n5. Click [writewavs] \u2014 17 WAVs land in conformance/golden/.\nRe-run? Close and reopen the patch first (fresh gen~ state)."
+     "text": "GenExpr Conformance Render Host (v2)\nPatch sources are copied next to this file by tools/gen_render_host.py.\n1. Open this patch; check Max console: all 9 gen~ must compile clean.\n2. node.script autostarts (or click [script start]); console shows buffer sizing.\n3. Click [arm] with DSP OFF.\n4. Turn DSP ON (ezdac~), wait 1 second, turn DSP OFF.\n5. Click [writewavs] \u2014 17 WAVs land in conformance/golden/.\nRe-run? Close and reopen the patch first (fresh gen~ state)."
     }
    },
    {

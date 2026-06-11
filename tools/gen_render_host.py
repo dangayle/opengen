@@ -6,10 +6,16 @@ one record~ + buffer~ pair per output channel. node.script orchestrates
 buffer sizing (sizeinsamps 4096), record arming, and absolute-path WAV
 writes — no runtime code injection (vanilla gen~ has no `code` message).
 
+Also copies conformance/patches/*.genexpr next to the generated host:
+the patcher's own folder is always in Max's search path, so `@gen <stem>.genexpr`
+resolves with zero user configuration (the copies are gitignored;
+conformance/patches/ stays canonical).
+
 Regenerate after adding a conformance patch:
     python3 tools/gen_render_host.py
 """
 import json
+import shutil
 from pathlib import Path
 
 # stem -> number of output channels (keep in sync with conformance/patches/)
@@ -55,8 +61,8 @@ def connect(src, src_idx, dst, dst_idx):
 add_box(
     "comment",
     "GenExpr Conformance Render Host (v2)\n"
-    "0. One-time: Options > File Preferences > add this repo's conformance/patches folder.\n"
-    "1. Reopen this patch; check Max console: all 9 gen~ must compile clean.\n"
+    "Patch sources are copied next to this file by tools/gen_render_host.py.\n"
+    "1. Open this patch; check Max console: all 9 gen~ must compile clean.\n"
     "2. node.script autostarts (or click [script start]); console shows buffer sizing.\n"
     "3. Click [arm] with DSP OFF.\n"
     "4. Turn DSP ON (ezdac~), wait 1 second, turn DSP OFF.\n"
@@ -137,6 +143,21 @@ patcher = {
     }
 }
 
-out = Path(__file__).resolve().parent.parent / "conformance" / "render" / "render_host.maxpat"
+repo = Path(__file__).resolve().parent.parent
+render_dir = repo / "conformance" / "render"
+patches_dir = repo / "conformance" / "patches"
+
+# Copy patch sources next to the host so @gen resolves via the patcher's own
+# folder (no Max File Preferences setup needed).
+srcs = sorted(patches_dir.glob("*.genexpr"))
+assert {p.stem for p in srcs} == set(PATCHES), (
+    f"PATCHES map out of sync with {patches_dir}: "
+    f"{sorted(set(PATCHES) ^ {p.stem for p in srcs})}"
+)
+for src in srcs:
+    shutil.copy2(src, render_dir / src.name)
+print(f"copied {len(srcs)} .genexpr files into {render_dir}")
+
+out = render_dir / "render_host.maxpat"
 out.write_text(json.dumps(patcher, indent=1) + "\n")
 print(f"wrote {out} ({len(boxes)} boxes, {len(lines)} lines, {len(buffer_names)} channels)")
