@@ -13,8 +13,10 @@ their rustdoc:
 
 **Confirmed in real Max gen~ 2026-06-10:** as shipped → silence; with obj-30
 changed to `* -0.5` → definite 440 Hz peak, peakamp ≈ 1 (noise-driven).
-opengen's semantics match real gen~ on this patch. Remaining action: submit
-the bug report to Cycling '74 (draft in the research doc).
+opengen's semantics match real gen~ on this patch. Bug reported to the Max
+community (Discord, 2026-06-10) with repro patch — see the research doc.
+No further action unless upstream ships a fix (the tripwire in
+`exit_resonator_vendor_sign_bug_renders_silence` will catch that).
 
 opengen root-caused a sign bug in the shipped `gen_resonator.gendsp` example
 (obj-30 `* 0.5` should be `* -0.5`; full analysis in

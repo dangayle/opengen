@@ -5,7 +5,8 @@
 example outputs silence for the drive values below; with obj-30 changed to
 `* -0.5` it resonates with a definite spectral peak at 440 Hz and peak
 amplitude fluctuating around 1 under noise excitation — matching opengen's
-predictions exactly. Pending: report to Cycling '74 (draft below).
+predictions exactly. **Reported to Cycling '74 2026-06-10** (shared
+informally via the Max community Discord, with repro patch attached).
 
 **File:** `reference/gen/examples/gen_resonator.gendsp` (shipped Max example,
 used by `gen~.resonator_bank_v2.maxpat`; credited to Graham Wakefield). Cited
