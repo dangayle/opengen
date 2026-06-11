@@ -315,12 +315,17 @@ fn exit_dattorro_plate_stress() {
 // Corpus ratchets — GSOT (189 files)
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// PINNED at D17 for GSOT corpus.
+/// PINNED at 2026-06-10 for GSOT corpus (189 `.gendsp` files).
 /// Cargo test: `cargo test -p opengen-analysis --release exit_gsot_corpus_ratchet`
+///
+/// Top remaining failure reasons (M3 backlog):
+/// 1. Unknown operators (`+=`, `interp`, `t60`, `min`, `max` with >2 args) — ~15 files
+/// 2. Multiple `gen`-started commands before first `out` (codebox parse order) — ~10 files
+/// 3. Codebox identifier resolution (undefined `rt`, unbound locals across branches) — ~8 files
 ///
 /// Use `OPENGEN_DANG_TOOLS`/`OPENGEN_FORS` env vars to override default paths.
 /// All corpus tests skip cleanly when the corpus is absent.
-const PINNED_GSOT: usize = 0; // will be updated after first run
+const PINNED_GSOT: usize = 121;
 
 #[test]
 fn exit_gsot_corpus_ratchet() {
@@ -400,8 +405,12 @@ fn exit_gsot_corpus_ratchet() {
 // Corpus ratchets — dang-tools (36 files)
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// PINNED at D17 for dang-tools corpus.
-const PINNED_DANG_TOOLS: usize = 0; // will be updated after first run
+/// PINNED at 2026-06-10 for dang-tools corpus (36 `.gendsp` files).
+/// Top remaining failure reasons (M3 backlog):
+/// 1. Unknown functions: `selector`, `mix` with non-numeric args — ~3 files
+/// 2. Abstraction calls inside control flow (unsupported in M2) — ~1 file
+/// 3. Undefined identifier `rt` in codebox expressions — ~1 file
+const PINNED_DANG_TOOLS: usize = 31;
 
 #[test]
 fn exit_dang_tools_ratchet() {
@@ -477,8 +486,12 @@ fn exit_dang_tools_ratchet() {
 // Corpus ratchets — Fors (embedded gen patchers in .amxd)
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// PINNED at D17 for Fors corpus.
-const PINNED_FORS: usize = 0; // will be updated after first run
+/// PINNED at 2026-06-10 for Fors corpus (34 `.amxd` files with embedded dsp.gen patchers).
+/// Top remaining failure reasons (M3 backlog):
+/// 1. No dsp.gen sub-patchers in `.amxd` (genuinely non-gen devices: Slate, Opal, Opal-Ctl, Dust, etc.) — ~10 files
+/// 2. Unknown operator `gen` (gen~ abstraction references like `gen lp`, `gen hp`, `gen env`) — ~6 boxes
+/// 3. Unknown operators: `wave`, `ap`, `gate`, `gen` (various missing operators) — ~5 files
+const PINNED_FORS: usize = 14;
 
 #[test]
 fn exit_fors_smoke_ratchet() {
