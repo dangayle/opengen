@@ -11,11 +11,15 @@
 // NOTE: gen~ requires declarations BEFORE expression statements in a codebox
 // ("declarations must come before expressions" — observed in Max 9,
 // 2026-06-10; matches docs/research/gen_docs/genexpr_ebnf.md program order).
-// opengen's parser is lenient and accepts them anywhere.
+// gen~ also rejects the self-referential `h = history(h + 1)` shorthand
+// ("variable h is not defined") — feedback requires a declared History,
+// with reads before the write (see history_counter.genexpr).
+// opengen's parser is lenient on both.
 Delay d(64);
-h = history(h + 1);
+History h(0);
 imp = eq(h, 0);
 d.write(imp);
 out1 = d.read(1);
 out2 = d.read(4);
 out3 = d.read(16);
+h = h + 1;

@@ -470,7 +470,7 @@
         "box": {
          "id": "cb-1",
          "maxclass": "codebox",
-         "code": "// delay_echo.genexpr\n// Impulse at sample 0 fed into a 64-sample delay line with three taps.\n// Tests delay_write + delay_read with linear interpolation.\n// out1 = tap at 1 sample (1-sample delayed impulse)\n// out2 = tap at 4 samples (4-sample delayed impulse)\n// out3 = tap at 16 samples (16-sample delayed impulse)\n//\n// Impulse generated via history counter:\n//   h[n] = h[n-1] + 1, imp[n] = (h[n] == 0) \u2192 fires at n=0 only.\n//\n// NOTE: gen~ requires declarations BEFORE expression statements in a codebox\n// (\"declarations must come before expressions\" \u2014 observed in Max 9,\n// 2026-06-10; matches docs/research/gen_docs/genexpr_ebnf.md program order).\n// opengen's parser is lenient and accepts them anywhere.\nDelay d(64);\nh = history(h + 1);\nimp = eq(h, 0);\nd.write(imp);\nout1 = d.read(1);\nout2 = d.read(4);\nout3 = d.read(16);\n",
+         "code": "// delay_echo.genexpr\n// Impulse at sample 0 fed into a 64-sample delay line with three taps.\n// Tests delay_write + delay_read with linear interpolation.\n// out1 = tap at 1 sample (1-sample delayed impulse)\n// out2 = tap at 4 samples (4-sample delayed impulse)\n// out3 = tap at 16 samples (16-sample delayed impulse)\n//\n// Impulse generated via history counter:\n//   h[n] = h[n-1] + 1, imp[n] = (h[n] == 0) \u2192 fires at n=0 only.\n//\n// NOTE: gen~ requires declarations BEFORE expression statements in a codebox\n// (\"declarations must come before expressions\" \u2014 observed in Max 9,\n// 2026-06-10; matches docs/research/gen_docs/genexpr_ebnf.md program order).\n// gen~ also rejects the self-referential `h = history(h + 1)` shorthand\n// (\"variable h is not defined\") \u2014 feedback requires a declared History,\n// with reads before the write (see history_counter.genexpr).\n// opengen's parser is lenient on both.\nDelay d(64);\nHistory h(0);\nimp = eq(h, 0);\nd.write(imp);\nout1 = d.read(1);\nout2 = d.read(4);\nout3 = d.read(16);\nh = h + 1;\n",
          "numinlets": 0,
          "numoutlets": 3,
          "outlettype": [
@@ -719,7 +719,7 @@
         "box": {
          "id": "cb-1",
          "maxclass": "codebox",
-         "code": "// history_counter.genexpr\n// Impulse-at-sample-zero via history counter.\n// h[n] = h[n-1] + 1, h[0] = 0 (zero-initialized history).\n// imp = (h == 0) \u2192 1.0 at sample 0 only, 0.0 thereafter.\n// out1 = impulse train (single impulse at origin).\n// out2 = counter value (monotonic integer sequence 0, 1, 2, ...).\nh = history(h + 1);\nimp = eq(h, 0);\nout1 = imp;\nout2 = h;\n",
+         "code": "// history_counter.genexpr\n// Impulse-at-sample-zero via history counter.\n// h[n] = h[n-1] + 1, h[0] = 0 (zero-initialized history).\n// imp = (h == 0) \u2192 1.0 at sample 0 only, 0.0 thereafter.\n// out1 = impulse train (single impulse at origin).\n// out2 = counter value (monotonic integer sequence 0, 1, 2, ...).\n//\n// gen~ compat (observed Max 9, 2026-06-10): the self-referential shorthand\n// `h = history(h + 1)` is an opengen leniency \u2014 real gen~ rejects it\n// (\"variable h is not defined\"); feedback requires a declared History.\n// All reads precede the write: gen~ History reads AFTER an assignment see\n// the new value, opengen reads always see the previous sample. Keeping\n// reads first makes both engines agree.\nHistory h(0);\nimp = eq(h, 0);\nout1 = imp;\nout2 = h;\nh = h + 1;\n",
          "numinlets": 0,
          "numoutlets": 2,
          "outlettype": [
@@ -1274,7 +1274,7 @@
         "box": {
          "id": "cb-1",
          "maxclass": "codebox",
-         "code": "// sah_latch.genexpr\n// Sample-and-hold and latch driven by history counter.\n// h = {0, 1, 2, 3, ..., 4095}\n//\n// sah: samples h when h crosses 2.5 (trigger at h=3).\n//   output: held=0 until sample 3, then 3 forever.\n//\n// latch: passes h when h is non-zero.\n//   output: h=0\u21920 (held), h=1\u21921, h=2\u21922, ...\nh = history(h + 1);\nout1 = sah(h, h, 2.5);\nout2 = latch(h, h);\n",
+         "code": "// sah_latch.genexpr\n// Sample-and-hold and latch driven by history counter.\n// h = {0, 1, 2, 3, ..., 4095}\n//\n// sah: samples h when h crosses 2.5 (trigger at h=3).\n//   output: held=0 until sample 3, then 3 forever.\n//\n// latch: passes h when h is non-zero.\n//   output: h=0\u21920 (held), h=1\u21921, h=2\u21922, ...\n// gen~ compat: declared History + reads-before-write (see history_counter).\nHistory h(0);\nout1 = sah(h, h, 2.5);\nout2 = latch(h, h);\nh = h + 1;\n",
          "numinlets": 0,
          "numoutlets": 2,
          "outlettype": [
@@ -1458,7 +1458,7 @@
         "box": {
          "id": "cb-1",
          "maxclass": "codebox",
-         "code": "// slide_step.genexpr\n// Step response of slide (logarithmic smoother).\n// Step from 0 to 1 at sample 1 (sample 0 is 0).\n// Slide time constants: up=4, down=4 samples.\n// out1 = slewed step (asymptotic approach to 1.0).\nh = history(h + 1);\nstep = switch(gt(h, 0), 1, 0);\nout1 = slide(step, 4, 4);\n",
+         "code": "// slide_step.genexpr\n// Step response of slide (logarithmic smoother).\n// Step from 0 to 1 at sample 1 (sample 0 is 0).\n// Slide time constants: up=4, down=4 samples.\n// out1 = slewed step (asymptotic approach to 1.0).\n// gen~ compat: declared History + reads-before-write (see history_counter).\nHistory h(0);\nstep = switch(gt(h, 0), 1, 0);\nout1 = slide(step, 4, 4);\nh = h + 1;\n",
          "numinlets": 0,
          "numoutlets": 1,
          "outlettype": [

@@ -7,6 +7,8 @@
 //
 // latch: passes h when h is non-zero.
 //   output: h=0→0 (held), h=1→1, h=2→2, ...
-h = history(h + 1);
+// gen~ compat: declared History + reads-before-write (see history_counter).
+History h(0);
 out1 = sah(h, h, 2.5);
 out2 = latch(h, h);
+h = h + 1;

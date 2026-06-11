@@ -256,4 +256,6 @@ These items need real Max gen~ renders to produce golden WAVs (per `conformance/
 - peek/poke NaN + (−1,0)-index conformance items
 - `^^` precedence conformance cross-check (the plan's ladder was mis-transcribed; vendor PEG won: `||` → `^^` → `&&` → `|` → `^` → `&`)
 - declaration-ordering strictness: real gen~ rejects declarations after expression statements ("declarations must come before expressions", observed Max 9 2026-06-10; matches `docs/research/gen_docs/genexpr_ebnf.md` program order). opengen's parser is lenient — add a strict mode or lint warning so authored patches stay gen~-loadable
+- self-referential history shorthand: `h = history(h + 1)` is an opengen leniency — real gen~ errors "variable h is not defined" (observed Max 9 2026-06-10); feedback requires declared `History`. Same strict-mode/lint scope as above
+- History read-after-write semantics divergence: opengen reads of a declared History ALWAYS see the previous sample (dataflow binding to the history output, pinned in `lower_v2.rs::history_decl_with_init`); gen~ History behaves like a variable within the sample — reads after an assignment see the NEW value. Authored conformance patches keep all reads before the write so both engines agree; needs a conformance probe + `# Divergence`/fix decision in M3
 - C++ emitter (the M3 milestone itself)

@@ -4,7 +4,15 @@
 // imp = (h == 0) → 1.0 at sample 0 only, 0.0 thereafter.
 // out1 = impulse train (single impulse at origin).
 // out2 = counter value (monotonic integer sequence 0, 1, 2, ...).
-h = history(h + 1);
+//
+// gen~ compat (observed Max 9, 2026-06-10): the self-referential shorthand
+// `h = history(h + 1)` is an opengen leniency — real gen~ rejects it
+// ("variable h is not defined"); feedback requires a declared History.
+// All reads precede the write: gen~ History reads AFTER an assignment see
+// the new value, opengen reads always see the previous sample. Keeping
+// reads first makes both engines agree.
+History h(0);
 imp = eq(h, 0);
 out1 = imp;
 out2 = h;
+h = h + 1;
