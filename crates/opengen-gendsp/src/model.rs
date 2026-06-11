@@ -48,11 +48,18 @@ pub struct Line {
 impl Patcher {
     /// Extract a `Patcher` from a parsed `.gendsp` JSON value.
     ///
-    /// Expects the root `{"patcher": {...}}` structure.
+    /// Expects the root `{"patcher": {...}}` structure (for `.gendsp` files) or
+    /// an inline patcher object with `boxes`/`lines` directly (for embedded
+    /// dsp.gen sub-patchers inside `.amxd` containers).
     pub fn from_json(json: &Json) -> Result<Self, String> {
-        let patcher = json.get("patcher")
-            .ok_or_else(|| "missing 'patcher' key".to_string())?;
-        Self::from_json_value(patcher)
+        match json.get("patcher") {
+            Some(patcher) => Self::from_json_value(patcher),
+            None => {
+                // Embedded sub-patcher (e.g., Fors .amxd): boxes/lines are
+                // direct keys, not wrapped in a "patcher" key.
+                Self::from_json_value(json)
+            }
+        }
     }
 
     /// Extract a `Patcher` from a "patcher" JSON object (without the wrapper).
