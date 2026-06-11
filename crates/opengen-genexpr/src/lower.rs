@@ -33,26 +33,46 @@ pub trait AbstractionResolver {
 /// Builtin constants that GenExpr resolves in identifier position (unless shadowed).
 ///
 /// # Documented
-/// GenExpr Language Guide, chapter "Builtins & Constants": lists `pi`, `twopi`, `halfpi`,
-/// `invpi`, `e`, `ln2`, `ln10`, `log2e`, `log10e`, `sqrt2`, `sqrt1_2`, `degtorad`, `radtodeg`.
+/// GenExpr Language Guide, chapter "Builtins & Constants" (§ CONSTANTS table):
+/// lists lowercase forms `pi`, `twopi`, `halfpi`, `invpi`, `e`, `ln2`, `ln10`,
+/// `log2e`, `log10e`, `sqrt2`, `sqrt1_2`, `phi`, `degtorad`, `radtodeg`.
+/// The same table documents uppercase aliases for every constant: `PI`, `TWOPI`,
+/// `HALFPI`, `INVPI`, `E`, `LN2`, `LOG2E`, `LOG10E`, `SQRT2`, `SQRT1_2`, `PHI`,
+/// `DEGTORAD`, `RADTODEG`. (`ln10` has no documented uppercase alias, but gen~
+/// accepts `LN10`; we match gen~ behavior.)
 /// Values match `std::f64::consts` where applicable.
 ///
 /// `samplerate` is a separate arity-0 operator (not a constant); `vectorsize` is 1.0
 /// per the per-sample engine divergence (see `# Divergence` on those entries).
 const BUILTIN_CONSTANTS: &[(&str, f64)] = &[
     ("pi", std::f64::consts::PI),
+    ("PI", std::f64::consts::PI),
     ("twopi", std::f64::consts::TAU),
+    ("TWOPI", std::f64::consts::TAU),
     ("halfpi", std::f64::consts::FRAC_PI_2),
+    ("HALFPI", std::f64::consts::FRAC_PI_2),
     ("invpi", std::f64::consts::FRAC_1_PI),
+    ("INVPI", std::f64::consts::FRAC_1_PI),
     ("e", std::f64::consts::E),
+    ("E", std::f64::consts::E),
     ("ln2", std::f64::consts::LN_2),
+    ("LN2", std::f64::consts::LN_2),
     ("ln10", std::f64::consts::LN_10),
+    ("LN10", std::f64::consts::LN_10),
     ("log2e", std::f64::consts::LOG2_E),
+    ("LOG2E", std::f64::consts::LOG2_E),
     ("log10e", std::f64::consts::LOG10_E),
+    ("LOG10E", std::f64::consts::LOG10_E),
     ("sqrt2", std::f64::consts::SQRT_2),
+    ("SQRT2", std::f64::consts::SQRT_2),
     ("sqrt1_2", std::f64::consts::FRAC_1_SQRT_2),
+    ("SQRT1_2", std::f64::consts::FRAC_1_SQRT_2),
+    ("phi", 1.61803398874989484820458683436563811772030917980576), // golden ratio
+    ("PHI", 1.61803398874989484820458683436563811772030917980576),
     ("degtorad", std::f64::consts::PI / 180.0),
+    ("DEGTORAD", std::f64::consts::PI / 180.0),
     ("radtodeg", 180.0 / std::f64::consts::PI),
+    ("RADTODEG", 180.0 / std::f64::consts::PI),
     // `vectorsize` → 1.0 (per-sample engine; gen~ returns actual vector size).
     // # Divergence
     // opengen uses a per-sample engine (vectorsize is always 1), whereas gen~ can
@@ -2461,5 +2481,45 @@ mod tests {
         use opengen_testkit::render;
         let out = render("1 + 2; out1 = 42;", 48000.0, 1);
         assert_eq!(out.ch(0)[0], 42.0);
+    }
+
+    #[test]
+    fn uppercase_constant_aliases_resolve() {
+        // Documented uppercase aliases (genexpr_language_reference.md § CONSTANTS table)
+        use opengen_testkit::render;
+        let out = render("out1 = PI;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::PI);
+        let out = render("out1 = TWOPI;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::TAU);
+        let out = render("out1 = HALFPI;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::FRAC_PI_2);
+        let out = render("out1 = INVPI;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::FRAC_1_PI);
+        let out = render("out1 = E;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::E);
+        let out = render("out1 = LN2;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::LN_2);
+        let out = render("out1 = LOG2E;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::LOG2_E);
+        let out = render("out1 = LOG10E;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::LOG10_E);
+        let out = render("out1 = SQRT2;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::SQRT_2);
+        let out = render("out1 = SQRT1_2;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::FRAC_1_SQRT_2);
+        let out = render("out1 = PHI;", 48000.0, 1);
+        assert!((out.ch(0)[0] - 1.618033988749895).abs() < 1e-15);
+        let out = render("out1 = DEGTORAD;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], std::f64::consts::PI / 180.0);
+        let out = render("out1 = RADTODEG;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], 180.0 / std::f64::consts::PI);
+    }
+
+    #[test]
+    fn uppercase_constant_shadowing_wins() {
+        // Shadowing: a user assignment to the same name overrides the builtin.
+        use opengen_testkit::render;
+        let out = render("PI = 2; out1 = PI;", 48000.0, 1);
+        assert_eq!(out.ch(0)[0], 2.0);
     }
 }
