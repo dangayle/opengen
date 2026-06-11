@@ -40,18 +40,21 @@ Also report the patch bug to Cycling '74 (draft text in the research doc).
 - **Audio enabled** (DSP turned on — any output device works)
 - This repository checked out at the working directory
 
-## Steps (render kit v3 — rebuilt 2026-06-10)
+## Steps (render kit v4 — rebuilt 2026-06-11)
 
-> The original kit was never exercised and could not work (no start trigger,
+> Kit history: v1 was never exercised and could not work (no start trigger,
 > unwired node.script, a gen~ `code` message that does not exist). v2's
-> `@gen <file>.genexpr` also failed: gen~ has no documented way to load a
-> `.genexpr` file from its box text (`.genexpr` only loads via `require()`
-> for function libraries). v3 EMBEDS each patch's GenExpr source as a
-> codebox inside a dsp.gen subpatcher (the corpus-verified structure), so
-> there is no file resolution at all. One `record~` + `buffer~` pair per
-> output channel (17 total); `node.script` only sizes buffers and writes
-> WAVs. Regenerate after adding/editing a patch:
-> `python3 tools/gen_render_host.py` (reads `conformance/patches/`).
+> `@gen <file>.genexpr` failed — gen~ cannot load `.genexpr` from box text
+> (`.genexpr` only loads via `require()`). v3 embedded the sources as
+> codeboxes (works) but used record~ armed before DSP-on for alignment —
+> measured ~0.7 s late — and buffer~'s default `write` produced int16 WAVs
+> (quantization breaks the 1e-6 tolerance; counter values > 1.0 clip).
+> v4 captures INSIDE each gen~ patcher: every output channel is poked into
+> its named buffer~ at index `elapsed` (samples since DSP began — the same
+> t=0 as codebox History state, so alignment is correct by construction;
+> out-of-range pokes are ignored, so capture self-terminates at 4096).
+> WAVs are written `writewave <path> float32`. Regenerate after
+> adding/editing a patch: `python3 tools/gen_render_host.py`.
 
 ### 1. Open Render Host
 
@@ -64,22 +67,15 @@ The `node.script` autostarts (`@autostart 1`); the console should show
 `render_runner: sized 17 buffers to 4096 samples`. If not, click the
 `script start` message box.
 
-### 2. Arm the recorders (DSP still OFF)
+### 2. Record
 
-Click the `arm` message box. Arming before DSP-on is what aligns capture to
-patch t = 0: every recorder starts at the first processed vector, exactly
-when gen~ state initializes.
+Turn DSP ON (ezdac~), wait about 1 second, turn DSP OFF. Capture runs
+automatically during the first 4096 samples after DSP start.
 
-### 3. Record
+### 3. Write the WAVs
 
-Turn DSP ON (ezdac~), wait about 1 second, turn DSP OFF. Each buffer is
-exactly 4096 samples; recorders stop automatically when full.
-
-### 4. Write the WAVs
-
-Click the `writewavs` message box. The runner sends each `buffer~` a `write`
-message with the absolute path `conformance/golden/<stem>.ch<N>.wav` and
-logs each file to the console.
+Click the `writewavs` message box. The runner sends each `buffer~`
+`writewave <abspath> float32` into `conformance/golden/` and logs each file.
 
 To re-record, close and reopen the patch first (fresh gen~ state), then
 repeat from step 2.
@@ -111,13 +107,16 @@ the runner script. Common issues:
 - Node for Max not available → node.script won't start
 - File permissions → buffer~ write may fail
 
-**Bit-depth check (first run):** the comparator's 1e-6 tolerance requires
-float32 WAVs. If `cargo test` fails with uniform ~1e-5 diffs, buffer~ wrote
-int16 — report back and we'll switch the write path to float32 explicitly.
+**Bit-depth check:** the comparator's 1e-6 tolerance requires float32 WAVs
+(`writewave <path> float32`). If `cargo test` fails with uniform ~1e-5
+diffs, the float32 argument was not honored — check the Max console for
+writewave errors. (First render attempt 2026-06-11 used plain `write` →
+int16: quantized AND clipped counter channels at 1.0.)
 
 **Alignment check is automatic:** `history_counter.ch1` must read 0,1,2,…
-and `cycle`/`phasor` must start at exactly 0. If capture missed patch t=0,
-the comparator fails on sample 0 — close/reopen the patch and re-record.
+and `cycle`/`phasor` must start at exactly 0. v4's poke-at-elapsed capture
+makes this hold by construction; if it fails on sample 0, gen~ state and
+`elapsed` did not share t=0 (e.g. a re-run without reopening the patch).
 
 ### 6. Run Conformance Tests
 
