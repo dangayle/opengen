@@ -160,13 +160,10 @@ fn multi_assign_from_non_function_errors() {
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn return_outside_function_errors() {
-    let err =
-        opengen_genexpr::parse_and_lower("return 42;\nout1 = 1;").unwrap_err();
-    assert!(
-        err.contains("return"),
-        "expected error about return, got: {err}"
-    );
+fn return_outside_function_compiles() {
+    // Return is now supported at the codebox level (not just functions).
+    let result = opengen_genexpr::parse_and_lower("return 42;\nout1 = 1;");
+    assert!(result.is_ok(), "return at codebox level should compile now: {:?}", result.err());
 }
 
 // ═══════════════════════════════════════════════════════════════════

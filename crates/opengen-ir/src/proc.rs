@@ -54,6 +54,8 @@ pub enum PStmt {
     Break,
     /// Skip remaining statements in the innermost While body and re-check condition.
     Continue,
+    /// Return from a function with optional values.
+    Return(Vec<PExpr>),
 }
 
 /// A structured procedural region — the compiled form of a codebox.

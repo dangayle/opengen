@@ -848,8 +848,11 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 // No metadata to collect from break/continue.
                 Ok(())
             }
-            StatementKind::Return(_) => {
-                Err(LowerError { msg: "return not yet implemented (Task 16)".to_string(), loc: None })
+            StatementKind::Return(exprs) => {
+                for e in exprs {
+                    self.collect_meta_from_expr(e, meta);
+                }
+                Ok(())
             }
             StatementKind::MultiAssign { .. } => {
                 Err(LowerError { msg: "multi-assign not yet implemented (Task 16)".to_string(), loc: None })
@@ -1096,8 +1099,12 @@ impl<'a, 'b> Lowerer<'a, 'b> {
             StatementKind::Continue => {
                 Ok(vec![proc::PStmt::Continue])
             }
-            StatementKind::Return(_) => {
-                Err(LowerError { msg: "return not yet implemented (Task 16)".to_string(), loc: None })
+            StatementKind::Return(exprs) => {
+                let mut lowered = Vec::new();
+                for e in exprs {
+                    lowered.push(self.lower_region_expr(e, meta, input_port_of)?);
+                }
+                Ok(vec![proc::PStmt::Return(lowered)])
             }
             StatementKind::MultiAssign { .. } => {
                 Err(LowerError { msg: "multi-assign not yet implemented (Task 16)".to_string(), loc: None })
@@ -1669,7 +1676,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 Err(LowerError { msg: "continue not yet implemented (Task 14–15)".to_string(), loc: None })
             }
             StatementKind::Return(_) => {
-                Err(LowerError { msg: "return not yet implemented (Task 14–16)".to_string(), loc: None })
+                Ok(())
             }
             StatementKind::MultiAssign { expr, .. } => {
                 if self.resolver.is_some() {

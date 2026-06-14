@@ -54,6 +54,7 @@ enum RStep {
     While { cond: RExpr, body: Vec<RStep> },
     Break,
     Continue,
+    Return,
 }
 
 /// Control flow signals for while/break/continue.
@@ -61,6 +62,7 @@ enum Flow {
     Normal,
     Break,
     Continue,
+    Return,
 }
 
 // ---------------------------------------------------------------------------
@@ -267,11 +269,13 @@ fn run_rsteps(
                         Flow::Normal => {}
                         Flow::Break => break,
                         Flow::Continue => continue,
+                        Flow::Return => return Flow::Return,
                     }
                 }
             }
             RStep::Break => return Flow::Break,
             RStep::Continue => return Flow::Continue,
+            RStep::Return => return Flow::Return,
         }
     }
     Flow::Normal
@@ -409,6 +413,7 @@ fn lower_region_stmt(
         }
         proc::PStmt::Break => Ok(RStep::Break),
         proc::PStmt::Continue => Ok(RStep::Continue),
+        proc::PStmt::Return(_values) => Ok(RStep::Return),
     }
 }
 

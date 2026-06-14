@@ -369,3 +369,19 @@ fn for_multi_init_lowers_and_renders_correctly() {
     assert_eq!(out.ch(0)[2], 13.0);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  Early returns in functions
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn early_return_compiles_and_runs() {
+    // Return in a codebox exits execution for that sample.
+    // When in1 > 0, return exits and out1 keeps its previous value (0.0).
+    let src = "out1 = 0; if (in1 > 0) { out1 = 10; return; } out1 = 5;";
+    let out = opengen_testkit::render_with_inputs(src, 48_000.0, &[&[-1.0, 1.0]]);
+    // in1=-1: out1=0, if false, out1=5
+    assert_eq!(out.ch(0)[0], 5.0);
+    // in1=1: out1=0, if true → out1=10, return exits, out1 stays 10
+    assert_eq!(out.ch(0)[1], 10.0);
+}
+
