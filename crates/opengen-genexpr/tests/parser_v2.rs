@@ -92,40 +92,16 @@ fn logical_xor() {
 
 #[test]
 fn caretcaret_binds_between_oror_and_andand() {
-    // Correct vendor precedence ladder (low→high):
-    // ?: → || → ^^ → && → | → ^ → & → equality → ...
+    // Vendor PEP precedence ladder (low→high; gen~ only, no bitwise):
+    // ?: → || → ^^ → && → equality → relational → ...
     // ^^ is between || (looser) and && (tighter).
-    // Vendor: reference/rnbo/genexpr_js/genexpr.pegjs operator_precedence
+    // Verified against live C74 docs 2026-06-13: bitwise `&`/`|`/`^` are not
+    // gen~ operators; `&` and `^` now produce lexer errors.
 
-    // 1 & 2 ^^ 3  =>  XorLogical( BitAnd(1,2), 3 )  — & is tighter than ^^, so (1&2) ^^ 3
-    let ast = parse("out1 = 1 & 2 ^^ 3;").unwrap();
-    match &ast.statements[0].kind {
-        StatementKind::Assign { expr, .. } => {
-            match expr {
-                Expr::BinOp { op: BinOpKind::LogicalXor, left, right } => {
-                    assert!(matches!(**left, Expr::BinOp { op: BinOpKind::BitAnd, .. }));
-                    assert!(matches!(**right, Expr::Number(3.0)));
-                }
-                other => panic!("expected LogicalXor at top for '1 & 2 ^^ 3', got {other:?}"),
-            }
-        }
-        _ => panic!("expected assign"),
-    }
-
-    // 1 ^ 2 ^^ 3  =>  XorLogical( BitXor(1,2), 3 )  — ^ is tighter than ^^, so (1^2) ^^ 3
-    let ast = parse("out1 = 1 ^ 2 ^^ 3;").unwrap();
-    match &ast.statements[0].kind {
-        StatementKind::Assign { expr, .. } => {
-            match expr {
-                Expr::BinOp { op: BinOpKind::LogicalXor, left, right } => {
-                    assert!(matches!(**left, Expr::BinOp { op: BinOpKind::BitXor, .. }));
-                    assert!(matches!(**right, Expr::Number(3.0)));
-                }
-                other => panic!("expected LogicalXor at top for '1 ^ 2 ^^ 3', got {other:?}"),
-            }
-        }
-        _ => panic!("expected assign"),
-    }
+    // 1 & 2 ^^ 3 — `&` is a lexer error (not a gen~ operator)
+    assert!(parse("out1 = 1 & 2 ^^ 3;").is_err());
+    // 1 ^ 2 ^^ 3 — `^` is a lexer error
+    assert!(parse("out1 = 1 ^ 2 ^^ 3;").is_err());
 
     // 1 && 2 ^^ 3  =>  XorLogical( And(1,2), 3 )  — && is tighter than ^^, so (1&&2) ^^ 3
     let ast = parse("out1 = 1 && 2 ^^ 3;").unwrap();
@@ -159,51 +135,16 @@ fn caretcaret_binds_between_oror_and_andand() {
 }
 
 #[test]
-fn bitwise_ops() {
-    let ast = parse("out1 = 5 & 3 | 1 ^ 2;").unwrap();
-    match &ast.statements[0].kind {
-        StatementKind::Assign { expr, .. } => {
-            // Precedence: & (7) > ^ (6) > | (5)
-            // So `5 & 3 | 1 ^ 2` → `(5 & 3) | (1 ^ 2)`
-            // Expected: Bitor(BitAnd(5,3), BitXor(1,2))
-            match expr {
-                Expr::BinOp { op: BinOpKind::BitOr, left, right } => {
-                    // Left: BitAnd(5, 3)
-                    match &**left {
-                        Expr::BinOp { op: BinOpKind::BitAnd, .. } => {}
-                        other => panic!("expected BitAnd on left of |, got {:?}", other),
-                    }
-                    // Right: BitXor(1, 2)
-                    match &**right {
-                        Expr::BinOp { op: BinOpKind::BitXor, .. } => {}
-                        other => panic!("expected BitXor on right of |, got {:?}", other),
-                    }
-                }
-                _ => panic!("expected BitOr at top"),
-            }
-        }
-        _ => panic!("expected assign"),
-    }
-}
-
-#[test]
-fn shift_ops() {
-    let ast = parse("out1 = 1 << 2 >> 1;").unwrap();
-    match &ast.statements[0].kind {
-        StatementKind::Assign { expr, .. } => {
-            match expr {
-                Expr::BinOp { op: BinOpKind::Shr, left, right } => {
-                    assert!(matches!(**right, Expr::Number(1.0)));
-                    match &**left {
-                        Expr::BinOp { op: BinOpKind::Shl, .. } => {}
-                        _ => panic!("expected Shl inside Shr"),
-                    }
-                }
-                _ => panic!("expected Shr at top"),
-            }
-        }
-        _ => panic!("expected assign"),
-    }
+fn bitwise_ops_rejected() {
+    // gen~ does not support bitwise operators (verified against live C74
+    // docs, gen_common_operators reference, and in-Max codebox compiler,
+    // 2026-06-13). `&`/`|`/`^` are lexer errors.
+    assert!(parse("out1 = 5 & 3;").is_err());
+    assert!(parse("out1 = 5 | 1;").is_err());
+    assert!(parse("out1 = 5 ^ 2;").is_err());
+    // << >> are not operators — they lex as two separate tokens and fail to parse
+    assert!(parse("out1 = 1 << 2;").is_err());
+    assert!(parse("out1 = 1 >> 2;").is_err());
 }
 
 #[test]

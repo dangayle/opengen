@@ -112,13 +112,7 @@ pub enum BinOpKind {
     LogicalAnd,
     LogicalOr,
     LogicalXor,
-    // Bitwise
-    BitAnd,
-    BitOr,
-    BitXor,
-    // Shifts
-    Shl,
-    Shr,
+
 }
 
 impl BinOpKind {
@@ -139,11 +133,7 @@ impl BinOpKind {
             BinOpKind::LogicalAnd => "and",
             BinOpKind::LogicalOr => "or",
             BinOpKind::LogicalXor => "xor",
-            BinOpKind::BitAnd => "bitand",
-            BinOpKind::BitOr => "bitor",
-            BinOpKind::BitXor => "bitxor",
-            BinOpKind::Shl => "shl",
-            BinOpKind::Shr => "shr",
+
         }
     }
 }

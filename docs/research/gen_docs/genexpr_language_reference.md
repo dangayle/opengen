@@ -247,7 +247,7 @@ Parameters appear as inlets on the gen~ object in the parent patcher. Their valu
 | `<=p`    | `ltep` | Pass-less-than-or-equal |
 | `>=p`    | `gtep` | Pass-greater-than-or-equal |
 
-### Logical / Bitwise
+### Logical Operators
 
 | Operator | Alias | Description |
 |----------|-------|-------------|
@@ -255,11 +255,6 @@ Parameters appear as inlets on the gen~ object in the parent patcher. Their valu
 | `\|\|`   | `or`  | Logical OR |
 | `^^`     | `xor` | Logical XOR |
 | `!`      | `not` | Logical NOT |
-| `<<`     |       | Bitwise left shift |
-| `>>`     |       | Bitwise right shift |
-| `&`      |       | Bitwise AND |
-| `\|`     |       | Bitwise OR |
-| `^`      |       | Bitwise XOR |
 
 ### Assignment Operators
 
@@ -286,15 +281,11 @@ condition ? value_if_true : value_if_false
 |-----------|-----------|
 | 1 (highest) | `*`, `/`, `%` |
 | 2 | `+`, `-` |
-| 3 | `<<`, `>>` |
-| 4 | `<`, `>`, `<=`, `>=`, `<p`, `>p`, `<=p`, `>=p` |
-| 5 | `==`, `!=`, `==p`, `!=p` |
-| 6 | `&` |
-| 7 | `^` |
-| 8 | `\|` |
-| 9 | `&&` |
-| 10 | `^^` |
-| 11 (lowest) | `\|\|` |
+| 3 | `<`, `>`, `<=`, `>=`, `<p`, `>p`, `<=p`, `>=p` |
+| 4 | `==`, `!=`, `==p`, `!=p` |
+| 5 | `&&` |
+| 6 | `^^` |
+| 7 (lowest) | `\|\|` |
 
 ---
 
@@ -916,12 +907,9 @@ Use this for routing signals without visual patchcord clutter, or when the signa
 
 ### All Values Are Float
 
-Every variable and expression is a 64-bit float. There is no integer type. Operations that require integer semantics (bitwise operators, array indices, loop counters) must be explicitly converted.
+Every variable and expression is a 64-bit float. There is no integer type. Operations that require integer semantics (array indices, loop counters) must be explicitly converted.
 
 ```genexpr
-// Bitwise operators require integer conversion
-result = int(in1) & int(in2);
-
 // Array indexing truncates, but being explicit avoids ambiguity
 idx = trunc(phase * 1024);
 val = peek(table, idx);

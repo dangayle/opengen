@@ -9,7 +9,9 @@ fn comments_and_numeric_forms() {
 #[test]
 fn new_operator_tokens_parse() {
     parse("out1 = (1 < 2) && !(3 > 4) || (1 ^^ 0);").unwrap();
-    parse("out1 = (5 & 3) | (1 ^ 2) + (1 << 2) + (8 >> 1);").unwrap();
+    // Bitwise & | ^ << >> removed (not gen~ operators, 2026-06-13).
+    // Replace with gen~-valid logical + arithmetic ops.
+    parse("out1 = (1 && 0) || (1 ^^ 0) && (5 + 3) + (8 - 1) == 12;").unwrap();
     parse("x = 1; x += 2; x -= 1; x *= 3; x /= 2; x %= 2; out1 = x;").unwrap();
     parse("out1 = 1 ? 2 : 3;").unwrap();
 }

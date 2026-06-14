@@ -8,7 +8,7 @@ pub mod state;
 pub mod osc;
 pub mod trig;
 pub mod convert;
-pub mod bitwise;
+pub mod samplerate;
 pub mod memory;
 pub mod filter;
 pub mod sample;

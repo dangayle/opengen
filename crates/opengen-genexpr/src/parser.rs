@@ -675,11 +675,11 @@ impl Parser {
 
     /// Logical AND: &&
     fn parse_logical_and(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_bitor()?;
+        let mut left = self.parse_equality()?;
 
         while self.current == Token::AndAnd {
             self.advance()?;
-            let right = self.parse_bitor()?;
+            let right = self.parse_equality()?;
             left = Expr::BinOp {
                 op: BinOpKind::LogicalAnd,
                 left: Box::new(left),
@@ -699,57 +699,6 @@ impl Parser {
             let right = self.parse_logical_and()?;
             left = Expr::BinOp {
                 op: BinOpKind::LogicalXor,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-        }
-
-        Ok(left)
-    }
-
-    /// Bitwise OR: |
-    fn parse_bitor(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_bitxor()?;
-
-        while self.current == Token::Pipe {
-            self.advance()?;
-            let right = self.parse_bitxor()?;
-            left = Expr::BinOp {
-                op: BinOpKind::BitOr,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-        }
-
-        Ok(left)
-    }
-
-    /// Bitwise XOR: ^
-    fn parse_bitxor(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_bitand()?;
-
-        while self.current == Token::Caret {
-            self.advance()?;
-            let right = self.parse_bitand()?;
-            left = Expr::BinOp {
-                op: BinOpKind::BitXor,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-        }
-
-        Ok(left)
-    }
-
-    /// Bitwise AND: &
-    fn parse_bitand(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_equality()?;
-
-        while self.current == Token::Amp {
-            self.advance()?;
-            let right = self.parse_equality()?;
-            left = Expr::BinOp {
-                op: BinOpKind::BitAnd,
                 left: Box::new(left),
                 right: Box::new(right),
             };
@@ -783,7 +732,7 @@ impl Parser {
 
     /// Relational: < > <= >=
     fn parse_relational(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_shift()?;
+        let mut left = self.parse_additive()?;
 
         loop {
             let op = match &self.current {
@@ -791,29 +740,6 @@ impl Parser {
                 Token::Gt => BinOpKind::Gt,
                 Token::Lte => BinOpKind::Lte,
                 Token::Gte => BinOpKind::Gte,
-                _ => break,
-            };
-            self.advance()?;
-
-            let right = self.parse_shift()?;
-            left = Expr::BinOp {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-        }
-
-        Ok(left)
-    }
-
-    /// Shifts: << >>
-    fn parse_shift(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_additive()?;
-
-        loop {
-            let op = match &self.current {
-                Token::Shl => BinOpKind::Shl,
-                Token::Shr => BinOpKind::Shr,
                 _ => break,
             };
             self.advance()?;

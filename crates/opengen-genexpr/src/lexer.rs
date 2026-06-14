@@ -55,14 +55,8 @@ pub enum Token {
     StarEq,
     SlashEq,
     PercentEq,
-    // Bitwise operators
-    Amp,       // &
-    Pipe,      // |
-    Caret,     // ^
-    CaretCaret,// ^^
-    Shl,       // <<
-    Shr,       // >>
     // Logical operators
+    CaretCaret,// ^^
     AndAnd,    // &&
     OrOr,      // ||
     // Unary
@@ -204,13 +198,18 @@ impl Lexer {
         }
 
         // Multi-character operators (maximal munch)
+        // Note: gen~ does NOT support bitwise operators (`&`, `|`, `^`,
+        // `<<`, `>>`). Single `&`/`|`/`^` and `<<`/`>>` produce a lexer
+        // error rather than a token (2026-06-13, verified against live
+        // C74 docs, the gen_common_operators reference, and the in-Max
+        // gen~ codebox compiler). `&&`/`||`/`^^` (logical) remain.
         if ch == '&' {
             self.advance();
             if self.current() == Some('&') {
                 self.advance();
                 return Ok(Spanned { tok: Token::AndAnd, loc: start_loc });
             }
-            return Ok(Spanned { tok: Token::Amp, loc: start_loc });
+            return Err(format!("bitwise AND (&) is not a GenExpr operator"));
         }
         if ch == '|' {
             self.advance();
@@ -218,7 +217,7 @@ impl Lexer {
                 self.advance();
                 return Ok(Spanned { tok: Token::OrOr, loc: start_loc });
             }
-            return Ok(Spanned { tok: Token::Pipe, loc: start_loc });
+            return Err(format!("bitwise OR (|) is not a GenExpr operator"));
         }
         if ch == '^' {
             self.advance();
@@ -226,14 +225,10 @@ impl Lexer {
                 self.advance();
                 return Ok(Spanned { tok: Token::CaretCaret, loc: start_loc });
             }
-            return Ok(Spanned { tok: Token::Caret, loc: start_loc });
+            return Err(format!("bitwise XOR (^) is not a GenExpr operator"));
         }
         if ch == '<' {
             self.advance();
-            if self.current() == Some('<') {
-                self.advance();
-                return Ok(Spanned { tok: Token::Shl, loc: start_loc });
-            }
             if self.current() == Some('=') {
                 self.advance();
                 return Ok(Spanned { tok: Token::Lte, loc: start_loc });
@@ -242,10 +237,6 @@ impl Lexer {
         }
         if ch == '>' {
             self.advance();
-            if self.current() == Some('>') {
-                self.advance();
-                return Ok(Spanned { tok: Token::Shr, loc: start_loc });
-            }
             if self.current() == Some('=') {
                 self.advance();
                 return Ok(Spanned { tok: Token::Gte, loc: start_loc });
@@ -545,13 +536,16 @@ mod tests {
         assert_eq!(lex.next_token().unwrap().tok, Token::Colon);
         assert_eq!(lex.next_token().unwrap().tok, Token::Eof);
 
-        // Bitwise operators (single and compound)
-        let mut lex = Lexer::new("& | ^ << >>");
-        assert_eq!(lex.next_token().unwrap().tok, Token::Amp);
-        assert_eq!(lex.next_token().unwrap().tok, Token::Pipe);
-        assert_eq!(lex.next_token().unwrap().tok, Token::Caret);
-        assert_eq!(lex.next_token().unwrap().tok, Token::Shl);
-        assert_eq!(lex.next_token().unwrap().tok, Token::Shr);
+        // Bitwise operators produce errors (not gen~ operators).
+        // << and >> lex as two separate Lt/Gt tokens.
+        assert!(Lexer::new("&").next_token().is_err());
+        assert!(Lexer::new("|").next_token().is_err());
+        assert!(Lexer::new("^").next_token().is_err());
+        let mut lex = Lexer::new("<< >>");
+        assert_eq!(lex.next_token().unwrap().tok, Token::Lt);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Lt);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Gt);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Gt);
         assert_eq!(lex.next_token().unwrap().tok, Token::Eof);
 
         // Compound assignment operators
@@ -570,15 +564,15 @@ mod tests {
         assert_eq!(lex.next_token().unwrap().tok, Token::RBrace);
         assert_eq!(lex.next_token().unwrap().tok, Token::Eof);
 
-        // Maximal munch: && before &, ^^ before ^, << before <, >> before >
-        let mut lex = Lexer::new("&&& ^^^ <<< >>>");
+        // Maximal munch: && before & is the only surviving case.
+        // Lone &/^ after a double form now error; <<< -> three Lt tokens.
+        let mut lex = Lexer::new("&& ^^ << >>>");
         assert_eq!(lex.next_token().unwrap().tok, Token::AndAnd);
-        assert_eq!(lex.next_token().unwrap().tok, Token::Amp);
         assert_eq!(lex.next_token().unwrap().tok, Token::CaretCaret);
-        assert_eq!(lex.next_token().unwrap().tok, Token::Caret);
-        assert_eq!(lex.next_token().unwrap().tok, Token::Shl);
         assert_eq!(lex.next_token().unwrap().tok, Token::Lt);
-        assert_eq!(lex.next_token().unwrap().tok, Token::Shr);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Lt);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Gt);
+        assert_eq!(lex.next_token().unwrap().tok, Token::Gt);
         assert_eq!(lex.next_token().unwrap().tok, Token::Gt);
         assert_eq!(lex.next_token().unwrap().tok, Token::Eof);
     }

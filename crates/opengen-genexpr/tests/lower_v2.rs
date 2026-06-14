@@ -1,4 +1,5 @@
-//! Lowering v2 tests: ternary/logical/bitwise, constants, History decls, samplerate, shadows.
+//! Lowering v2 tests: ternary/logical, constants, History decls, samplerate, shadows.
+//! Bitwise operators were removed (gen~ does not support them, 2026-06-13).
 //!
 //! TDD: each test covers one row of the M2 lowering table. Write → observe fail → implement → pass.
 
@@ -100,33 +101,14 @@ fn logical_xor() {
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn bitwise_and() {
-    let out = render("out1 = 5 & 3;", 1);
-    assert_eq!(out, vec![1.0]);
-}
-
-#[test]
-fn bitwise_or() {
-    let out = render("out1 = 1 | 2;", 1);
-    assert_eq!(out, vec![3.0]);
-}
-
-#[test]
-fn bitwise_xor() {
-    let out = render("out1 = 3 ^ 5;", 1);
-    assert_eq!(out, vec![6.0]);
-}
-
-#[test]
-fn bitwise_shl() {
-    let out = render("out1 = 1 << 3;", 1);
-    assert_eq!(out, vec![8.0]);
-}
-
-#[test]
-fn bitwise_shr() {
-    let out = render("out1 = 8 >> 3;", 1);
-    assert_eq!(out, vec![1.0]);
+fn bitwise_ops_rejected() {
+    // gen~ does not support bitwise operators (verified 2026-06-13).
+    // Expressions containing & | ^ << >> should fail to parse/lex.
+    assert!(opengen_genexpr::parse_and_lower("out1 = 5 & 3;").is_err());
+    assert!(opengen_genexpr::parse_and_lower("out1 = 5 | 1;").is_err());
+    assert!(opengen_genexpr::parse_and_lower("out1 = 5 ^ 2;").is_err());
+    assert!(opengen_genexpr::parse_and_lower("out1 = 1 << 3;").is_err());
+    assert!(opengen_genexpr::parse_and_lower("out1 = 8 >> 3;").is_err());
 }
 
 // ═══════════════════════════════════════════════════════════════════
