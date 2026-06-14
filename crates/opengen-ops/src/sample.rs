@@ -227,6 +227,8 @@ pub fn defs() -> Vec<OpDef> {
                 }
             }),
             kernel: sah,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "latch",
@@ -240,6 +242,8 @@ pub fn defs() -> Vec<OpDef> {
                 }
             }),
             kernel: latch,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "delta",
@@ -253,6 +257,8 @@ pub fn defs() -> Vec<OpDef> {
                 }
             }),
             kernel: delta,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "change",
@@ -266,6 +272,8 @@ pub fn defs() -> Vec<OpDef> {
                 }
             }),
             kernel: change,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "accum",
@@ -279,6 +287,8 @@ pub fn defs() -> Vec<OpDef> {
                 }
             }),
             kernel: accum,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
     ]
 }

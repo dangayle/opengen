@@ -123,6 +123,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: dcblock,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "slide",
@@ -137,6 +139,8 @@ pub fn defs() -> Vec<OpDef> {
                 }
             }),
             kernel: slide,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
     ]
 }

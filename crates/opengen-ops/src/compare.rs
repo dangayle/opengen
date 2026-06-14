@@ -132,11 +132,11 @@ pub fn neq(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 
 pub fn defs() -> Vec<OpDef> {
     vec![
-        OpDef { name: "gt", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: gt },
-        OpDef { name: "gte", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: gte },
-        OpDef { name: "lt", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: lt },
-        OpDef { name: "lte", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: lte },
-        OpDef { name: "eq", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: eq },
-        OpDef { name: "neq", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: neq },
+        OpDef { name: "gt", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: gt, cpp_kernel: None, emit_cpp_call: None },
+        OpDef { name: "gte", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: gte, cpp_kernel: None, emit_cpp_call: None },
+        OpDef { name: "lt", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: lt, cpp_kernel: None, emit_cpp_call: None },
+        OpDef { name: "lte", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: lte, cpp_kernel: None, emit_cpp_call: None },
+        OpDef { name: "eq", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: eq, cpp_kernel: None, emit_cpp_call: None },
+        OpDef { name: "neq", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: neq, cpp_kernel: None, emit_cpp_call: None },
     ]
 }

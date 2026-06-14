@@ -53,6 +53,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: step,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "smoothstep",
@@ -62,6 +64,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: smoothstep,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "rmod",
@@ -71,6 +75,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: rmod,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
     ]
 }

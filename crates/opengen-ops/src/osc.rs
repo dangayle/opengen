@@ -206,6 +206,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: phasor,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "cycle",
@@ -215,6 +217,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: cycle,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "noise",
@@ -224,6 +228,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: noise,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
     ]
 }

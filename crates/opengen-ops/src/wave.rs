@@ -48,6 +48,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: wave,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
     ]
 }

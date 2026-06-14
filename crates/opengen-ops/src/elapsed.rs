@@ -43,6 +43,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: elapsed,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
     ]
 }

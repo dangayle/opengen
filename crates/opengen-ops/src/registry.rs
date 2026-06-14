@@ -21,6 +21,12 @@ pub struct OpDef {
     /// One-time state initializer from IR node args; None = zero-init.
     pub init: Option<InitFn>,
     pub kernel: Kernel,
+    /// Pure C++ expression body with {a0}, {a1}, ... placeholders for inputs.
+    /// Used by the C++ emitter for stateless operators.
+    pub cpp_kernel: Option<&'static str>,
+    /// Emit full per-call C++ statement for stateful/sr-dependent ops.
+    /// Receives (out_slot, in_slots, state_off, sr) → returns C++ statement.
+    pub emit_cpp_call: Option<fn(out_slot: usize, in_slots: &[usize], state_off: usize, sr: f64) -> String>,
 }
 
 pub struct Registry { ops: std::collections::HashMap<&'static str, OpDef> }

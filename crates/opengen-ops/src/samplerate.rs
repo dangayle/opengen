@@ -24,6 +24,6 @@ pub fn samplerate_op(_inputs: &[f64], _state: &mut [f64], sr: f64) -> f64 {
 
 pub fn defs() -> Vec<OpDef> {
     vec![
-        OpDef { name: "samplerate", arity: 0, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: samplerate_op },
+        OpDef { name: "samplerate", arity: 0, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: samplerate_op, cpp_kernel: None, emit_cpp_call: None },
     ]
 }

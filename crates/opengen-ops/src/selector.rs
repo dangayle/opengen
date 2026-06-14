@@ -70,6 +70,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: selector3,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "selector5",
@@ -79,6 +81,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: selector5,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
     ]
 }

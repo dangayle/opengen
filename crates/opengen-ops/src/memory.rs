@@ -338,6 +338,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: peek,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "poke",
@@ -347,6 +349,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: poke,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "delay_write",
@@ -356,6 +360,8 @@ pub fn defs() -> Vec<OpDef> {
             update: Some(delay_write_update),
             init: None,
             kernel: delay_write,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "delay_read",
@@ -365,6 +371,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: delay_read,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
         OpDef {
             name: "delay_read_none",
@@ -374,6 +382,8 @@ pub fn defs() -> Vec<OpDef> {
             update: None,
             init: None,
             kernel: delay_read_none,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
     ]
 }

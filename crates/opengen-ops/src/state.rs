@@ -34,6 +34,8 @@ pub fn defs() -> Vec<OpDef> {
             update: Some(|i, s, _| s[0] = i[0]),
             init: Some(|args, s, _| if let Some(&v) = args.first() { s[0] = v }),
             kernel: history,
+            cpp_kernel: None,
+            emit_cpp_call: None,
         },
     ]
 }
