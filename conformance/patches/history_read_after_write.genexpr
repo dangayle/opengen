@@ -1,0 +1,17 @@
+// history_read_after_write.genexpr
+// DIVERGENCE PROBE: does gen~ History act like a variable (read-after-assignment
+// sees the NEW value) or a dataflow port (reads always see the previous sample)?
+//
+// opengen: all History reads bind to the history OUTPUT port → always see
+//   the previous sample's value (dataflow semantics).
+// gen~: observed (2026-06-10) that History behaves like a variable — a read
+//   placed AFTER an assignment in the same sample body sees the NEW value.
+//
+// Prediction: gen~ golden = [1, 2, 3, 4, ...]; opengen renders [0, 1, 2, 3, ...].
+//
+// All authored conformance patches keep reads BEFORE the write so both engines
+// agree. This patch deliberately places the read AFTER the write to measure
+// the divergence.
+History h(0);
+h = h + 1;      // assignment: h becomes 1 (gen~ variable semantics)
+out1 = h;       // read after write: 1 (gen~) vs 0 (opengen)?
