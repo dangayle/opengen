@@ -39,6 +39,11 @@ impl Registry {
         for def in crate::memory::defs() { ops.insert(def.name, def); }
         for def in crate::filter::defs() { ops.insert(def.name, def); }
         for def in crate::sample::defs() { ops.insert(def.name, def); }
+        for def in crate::selector::defs() { ops.insert(def.name, def); }
+        for def in crate::gate::defs() { ops.insert(def.name, def); }
+        for def in crate::elapsed::defs() { ops.insert(def.name, def); }
+        for def in crate::wave::defs() { ops.insert(def.name, def); }
+        for def in crate::step_smoothstep_rmod::defs() { ops.insert(def.name, def); }
         Registry { ops }
     }
     pub fn get(&self, name: &str) -> Option<&OpDef> { self.ops.get(name) }
