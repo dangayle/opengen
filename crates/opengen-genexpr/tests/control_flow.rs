@@ -354,3 +354,18 @@ fn for_with_stateful_step_keeps_per_site_state() {
     assert_eq!(out.ch(0)[0], expected);
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  for-init comma (multi-variable init)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn for_multi_init_lowers_and_renders_correctly() {
+    // For-loop init runs once per sample frame; body runs 3 times (i=0,1,2).
+    // j starts at 10 each sample, increments 3 times → 13.0.
+    let src = "for(i=0, j=10; i<3; i+=1) { j = j + 1; out1 = j; }";
+    let out = render(src, 48_000.0, 3);
+    assert_eq!(out.ch(0)[0], 13.0);
+    assert_eq!(out.ch(0)[1], 13.0);
+    assert_eq!(out.ch(0)[2], 13.0);
+}
+

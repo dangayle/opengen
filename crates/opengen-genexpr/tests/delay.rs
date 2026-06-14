@@ -363,3 +363,22 @@ fn multi_sample_ring_echo_works() {
     // Sample 3: in=4, read=3. out=3
     assert_eq!(out.ch(0), &[0.0, 1.0, 2.0, 3.0]);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  Multi-tap delay (two reads from same delay)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn multi_tap_two_reads_same_delay() {
+    // Delay d(8); d.write(in1); out1 = d.read(1); out2 = d.read(2);
+    let out = opengen_testkit::render_with_inputs(
+        "Delay d(8); d.write(in1); out1 = d.read(1); out2 = d.read(2);",
+        48_000.0,
+        &[&[1.0, 0.0, 0.0]],
+    );
+    // Sample 0: write 1, read 0, read 0 → out1=0, out2=0
+    // Sample 1: write 0, read 1 (from sample 0), read 0 → out1=1, out2=0
+    // Sample 2: write 0, read 0, read 1 → out1=0, out2=1
+    assert_eq!(out.ch(0), &[0.0, 1.0, 0.0]);
+    assert_eq!(out.ch(1), &[0.0, 0.0, 1.0]);
+}
