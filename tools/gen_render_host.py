@@ -29,6 +29,9 @@ Re-run: close and reopen the patch first (fresh gen~ state).
 
 Regenerate after adding/editing a conformance patch:
     python3 tools/gen_render_host.py
+
+Also writes conformance/render/patches.json (stem -> channel count) which
+render_runner.js reads at start — single source of truth, no manual sync.
 """
 import json
 import re
@@ -40,8 +43,12 @@ N_SAMPLES = 4096
 
 
 def load_patches():
+    # Hand-authored conformance patches plus auto-generated per-operator
+    # sweeps (conformance/patches/ops/, from tools/gen_op_sweeps.py). The
+    # op_ prefix keeps stems collision-free.
     patches = {}
-    for f in sorted(PATCHES_DIR.glob("*.genexpr")):
+    sources = sorted(PATCHES_DIR.glob("*.genexpr")) + sorted((PATCHES_DIR / "ops").glob("*.genexpr"))
+    for f in sources:
         src = f.read_text()
         outs = max(int(m) for m in re.findall(r"out(\d+)\s*=", src))
         ins = [int(m) for m in re.findall(r"\bin(\d+)\b", src)]
@@ -146,15 +153,19 @@ def gen_subpatcher(stem, src, n_out):
 
 
 # ── Instructions ─────────────────────────────────────────────────────────────
+N_PATCHES = len(PATCHES)
+N_CHANNELS = sum(n for _, n in PATCHES.values())
+
 add_box(
     "comment",
     "GenExpr Conformance Render Host (v4)\n"
     "Capture happens INSIDE each gen~ (poke @ elapsed) — sample-aligned to patch t=0\n"
     "by construction. No record~, no arming.\n"
-    "1. Open this patch; check Max console: all 9 gen~ must compile clean;\n"
-    "   node.script autostarts and sizes 17 buffers to 4096 samples.\n"
+    f"1. Open this patch; check Max console: all {N_PATCHES} gen~ must compile clean;\n"
+    f"   node.script autostarts and sizes {N_CHANNELS} buffers to 4096 samples.\n"
     "2. Turn DSP ON (ezdac~), wait ~1 second, turn DSP OFF.\n"
-    "3. Click [writewavs] — 17 float32 WAVs land in conformance/golden/.\n"
+    "   (Any sample rate works — dspstate~ reports the true rate to the runner.)\n"
+    f"3. Click [writewavs] — {N_CHANNELS} float32 WAVs land in conformance/golden/.\n"
     "Re-run? Close and reopen the patch first (fresh gen~ state).",
     20, 10, 640, 110, 1, 0,
 )
@@ -170,6 +181,18 @@ for m in (msg_start, msg_write):
     connect(m, 0, script, 0)
 
 add_box("ezdac~", None, 380, 140, 45, 45, 2, 0)
+
+# ── Sample-rate reporting: [dspstate~] outlet 1 (SR) fires on every DSP
+# on/off toggle -> [prepend sr] -> node.script "sr" handler. The runner
+# records the TRUE rate in the WAV headers; the Rust conformance test
+# renders opengen at the golden's header rate, so any driver rate works.
+dsp_state = add_box(
+    "newobj", "dspstate~", 450, 140, 80, 22, 1, 4,
+    ["int", "float", "int", "int"],
+)
+prepend_sr = add_box("newobj", "prepend sr", 450, 180, 75, 22, 1, 1, [""])
+connect(dsp_state, 1, prepend_sr, 0)
+connect(prepend_sr, 0, script, 0)
 
 # ── Routing: script outlet 0 -> [route buf] -> per-buffer route ──────────────
 route_top = add_box("newobj", "route buf", 20, 230, 70, 22, 1, 2, ["", ""])
@@ -227,3 +250,9 @@ patcher = {
 out = REPO / "conformance" / "render" / "render_host.maxpat"
 out.write_text(json.dumps(patcher, indent=1) + "\n")
 print(f"wrote {out} ({len(boxes)} boxes, {len(lines)} lines, {len(buffer_names)} channels)")
+
+# Single source of truth for render_runner.js: stem -> channel count.
+manifest = {stem: n_ch for stem, (_, n_ch) in PATCHES.items()}
+manifest_out = REPO / "conformance" / "render" / "patches.json"
+manifest_out.write_text(json.dumps(manifest, indent=2) + "\n")
+print(f"wrote {manifest_out} ({len(manifest)} patches)")

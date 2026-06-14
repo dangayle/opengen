@@ -277,6 +277,9 @@ function validateStem(dir, label, ext, validatorFn) {
 // Validate conformance patches (*.genexpr)
 validateStem("conformance/patches", "Conformance patches", ".genexpr", validateGenexprFile);
 
+// Validate auto-generated per-operator sweeps (*.genexpr)
+validateStem("conformance/patches/ops", "Operator sweeps", ".genexpr", validateGenexprFile);
+
 // Validate gendsp test fixtures (*.gendsp)
 validateStem("crates/opengen-gendsp/tests/fixtures", "Gendsp fixtures", ".gendsp", validateGendspFile);
 

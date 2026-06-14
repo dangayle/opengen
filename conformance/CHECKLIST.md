@@ -9,14 +9,24 @@ are rendered and committed (`conformance/golden/`, float32, t=0-aligned);
 constant input), and `clip` (inverted bounds pin to lo) were corrected from
 the goldens and their rustdoc upgraded to confirmed `# Observed`.
 
-Still pending a Max render:
+Still pending a Max render (4 probes; a 2026-06-11 session rendered them at
+44.1 kHz under WAV headers hardcoding 48 kHz — protocol-invalid, discarded —
+but the SR-independent previews were decisive; re-render to confirm):
 
 - **`dcblock_impulse`** — disambiguation probe (lazy x1-init vs compiler
-  constant-folding); see `conformance/patches/dcblock_impulse.genexpr`
-  header for the two predicted outcomes. Re-run the render session and
-  `cargo test -p opengen-analysis --test conformance` — if the new golden
-  starts with 1.0 instead of 0.0, dcblock needs the genlib (constant-fold)
-  interpretation instead.
+  constant-folding); see the patch header for the two predicted outcomes.
+  Preview: golden started `[1.0, -0.0003, …]` → **constant-folding wins**;
+  dcblock needs the genlib (x1=0 init) interpretation, and dcblock_step's
+  silence is a gen~ JIT constant-fold, not operator semantics.
+- **`history_read_after_write`** — History variable-vs-dataflow divergence.
+  Preview: golden `[1, 2, 3, …]` → gen~ History is write-through (reads
+  after an assignment see the NEW value); opengen renders `[0, 1, 2, …]`.
+- **`div_mod_zero`** — division/modulo by zero. Preview: gen~ JIT returned 0
+  for `1/0`, `0/0`, `-1/0` (matches genlib safediv/safemod facts); opengen
+  is raw IEEE-754 (inf/NaN) — likely div/mod divergence to resolve.
+- **`domain_guards`** — sqrt/asin/acos/log/pow domain violations: raw IEEE
+  NaN or guarded? Hunts for a usable NaN generator inside gen~ (0/0 cannot
+  make NaN — it is guarded to 0).
 
 ## ~~Pending~~ CONFIRMED probe: gen_resonator silence (vendor sign bug)
 
@@ -71,26 +81,35 @@ Also report the patch bug to Cycling '74 (draft text in the research doc).
 ### 1. Open Render Host
 
 Open `conformance/render/render_host.maxpat` in Max 9 and check the Max
-console: **all 9 gen~ objects must compile with no errors**. Never save the
+console: **all 13 gen~ objects must compile with no errors**. Never save the
 patch after a failed load: Max prunes patchcords from collapsed gen~
 outlets.
 
 The `node.script` autostarts (`@autostart 1`); the console should show
-`render_runner: sized 17 buffers to 4096 samples`. If not, click the
-`script start` message box.
+`render_runner: sized 29 buffers to 4096 samples` (the buffer list comes
+from `conformance/render/patches.json`, generated alongside the host — no
+manual sync). If not, click the `script start` message box.
 
 ### 2. Record
 
 Turn DSP ON (ezdac~), wait about 1 second, turn DSP OFF. Capture runs
 automatically during the first 4096 samples after DSP start.
 
+**Any sample rate works.** `[dspstate~]` reports the true DSP rate to the
+runner on every toggle; the rate is embedded in each golden's filename AND
+WAV header, and the Rust conformance test renders opengen at the golden's
+own rate. Renders at different rates coexist as separate files. (History:
+a 2026-06-11 session ran at 44.1 kHz under headers hardcoding 48 kHz —
+silent corruption this design prevents.)
+
 ### 3. Write the WAVs
 
 Click the `writewavs` message box. The runner has each `buffer~` write raw
-float32 to a temp file, wraps it in a WAV header, and saves
-`conformance/golden/<stem>.ch<N>.wav` — logging each file with its first
-three sample values (instant sanity check: `history_counter.ch1` should
-start `0, 1, 2`).
+float32 to a temp file, wraps it in a WAV header carrying the true DSP
+rate, and saves `conformance/golden/<stem>.ch<N>.<sr>.wav` — logging each
+file with its first three sample values (instant sanity check:
+`history_counter.ch1.<sr>.wav` should start `0, 1, 2`). The runner refuses
+to write if DSP was never toggled (rate unknown).
 
 To re-record, close and reopen the patch first (fresh gen~ state), then
 repeat from step 2.
@@ -98,21 +117,27 @@ repeat from step 2.
 ### 5. Verify Golden Files
 
 After the runner completes, verify that WAV files appear in
-`conformance/golden/`. Expected files (9 patches × N outputs):
+`conformance/golden/` named `<stem>.ch<N>.<sr>.wav` where `<sr>` is the
+session's DSP rate (e.g. `48000`). Expected channels (13 patches):
 
-| Patch | Outputs | Files |
-|---|---|---|
-| `phasor_incr_order` | 1 | `phasor_incr_order.ch0.wav` |
-| `cycle_440` | 1 | `cycle_440.ch0.wav` |
-| `history_counter` | 2 | `history_counter.ch0.wav`, `history_counter.ch1.wav` |
-| `delay_echo` | 3 | `delay_echo.ch0.wav` … `.ch1.wav` … `.ch2.wav` |
-| `slide_step` | 1 | `slide_step.ch0.wav` |
-| `dcblock_step` | 1 | `dcblock_step.ch0.wav` |
-| `range_inverted_bounds` | 3 | `range_inverted_bounds.ch0.wav` … `.ch1.wav` … `.ch2.wav` |
-| `triangle_duty` | 3 | `triangle_duty.ch0.wav` … `.ch1.wav` … `.ch2.wav` |
-| `sah_latch` | 2 | `sah_latch.ch0.wav`, `sah_latch.ch1.wav` |
+| Patch | Outputs |
+|---|---|
+| `cycle_440` | 1 |
+| `dcblock_impulse` | 1 |
+| `dcblock_step` | 1 |
+| `delay_echo` | 3 |
+| `div_mod_zero` | 5 |
+| `domain_guards` | 5 |
+| `history_counter` | 2 |
+| `history_read_after_write` | 1 |
+| `phasor_incr_order` | 1 |
+| `range_inverted_bounds` | 3 |
+| `sah_latch` | 2 |
+| `slide_step` | 1 |
+| `triangle_duty` | 3 |
 
-**Total: 17 WAV files** (all mono, 32-bit float, 48 kHz, 4096 samples)
+**Total: 29 WAV files per rendered rate** (all mono, 32-bit float,
+4096 samples)
 
 If some files are missing, check the Max window for error messages from
 the runner script. Common issues:
