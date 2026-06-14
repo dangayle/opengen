@@ -869,6 +869,17 @@ fn build_graph_from_patcher(
                 }
             }
 
+            // ── Step 2a: Copy named bindings with sub<N>/ prefix ──
+            // Named histories and other probe-able nodes inside the
+            // subpatcher must be bound with the sub<N>/ prefix so their
+            // targets don't collide across subpatcher instances.
+            for (name, sub_id) in sub_graph.bindings() {
+                if let Some(&host_id) = node_map.get(sub_id) {
+                    let prefixed = format!("sub{}/{}", sub_idx, name);
+                    host_graph.bind(prefixed, host_id);
+                }
+            }
+
             // ── Step 3: Wire host inlets to subpatcher internals ──
             // For each Input(n) in the subpatcher, find what it feeds
             // (its consumers), and wire the host signal instead.
@@ -1801,5 +1812,57 @@ mod tests {
         let graph = build_graph_with(&patcher, &opengen_ops::Registry::core(), &mut ctx).unwrap();
         let out = opengen_testkit::render_graph_with_inputs(&graph, 48000.0, &[&[1.0]], 1);
         assert_eq!(out.ch(0)[0], 0.0, "delay with no input should produce 0 (write not triggered yet)");
+    }
+
+    /// Named history bindings inside flattened subpatchers must get the
+    /// `sub<N>/` prefix so probe targets are unique across instances.
+    #[test]
+    fn subpatcher_named_history_bindings_get_prefix() {
+        let host_json = r#"{
+            "patcher": {
+                "fileversion": 1,
+                "classnamespace": "dsp.gen",
+                "rect": [0, 0, 400, 300],
+                "boxes": [
+                    {"box": {"id": "obj-1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                    {"box": {"id": "obj-sub", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1,
+                        "text": "gen @file subber",
+                        "patcher": {
+                            "boxes": [
+                                {"box": {"id": "s-in", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                                {"box": {"id": "s-hist", "maxclass": "newobj", "numinlets": 1, "numoutlets": 1, "text": "history h"}},
+                                {"box": {"id": "s-out", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                            ],
+                            "lines": [
+                                {"patchline": {"source": ["s-in", 0], "destination": ["s-hist", 0]}},
+                                {"patchline": {"source": ["s-hist", 0], "destination": ["s-out", 0]}}
+                            ]
+                        }
+                    }},
+                    {"box": {"id": "obj-3", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                ],
+                "lines": [
+                    {"patchline": {"source": ["obj-1", 0], "destination": ["obj-sub", 0]}},
+                    {"patchline": {"source": ["obj-sub", 0], "destination": ["obj-3", 0]}}
+                ]
+            }
+        }"#;
+
+        let j = crate::json::parse(host_json).unwrap();
+        let patcher = Patcher::from_json(&j).unwrap();
+        let mut ctx = ResolveCtx::new(vec![], None);
+        let graph = build_graph_with(&patcher, &opengen_ops::Registry::core(), &mut ctx).unwrap();
+
+        // The subpatcher's named history `h` should be bound as `sub0/h` in the host graph
+        assert!(
+            graph.binding("sub0/h").is_some(),
+            "subpatcher's named history 'h' should be bound as 'sub0/h'"
+        );
+
+        // The bare name `h` should NOT be bound (it's not visible at host level)
+        assert!(
+            graph.binding("h").is_none(),
+            "bare name 'h' should not leak from subpatcher into host graph"
+        );
     }
 }
