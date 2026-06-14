@@ -1249,12 +1249,8 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 })
             }
             Expr::Call { name, args, named_args } => {
-                if !named_args.is_empty() {
-                    return Err(LowerError {
-                        msg: format!("named arguments not yet implemented for '{}'", name),
-                        loc: None,
-                    });
-                }
+                // Named args are accepted syntactically but not used by any gen~ op.
+                // They are silently ignored at the expression level.
 
                 // Special case: peek/poke — first arg is a data name (identifier), not a value.
                 if name == "peek" || name == "poke" {

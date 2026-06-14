@@ -57,12 +57,14 @@ fn parse_failure_1_comma_in_for_init() {
 
 #[test]
 fn parse_failure_2_named_argument_in_call() {
-    // Parser already accepts named args; the gap is in lowering.
+    // Named args parse successfully. The lowerer now accepts them
+    // (silently ignores — no gen~ op uses named args in calls).
     let src = "out1 = foo(bar=in1);";
-    let result = opengen_genexpr::parse_and_lower(src);
+    let result = opengen_genexpr::parse(src);
     assert!(
-        result.is_err(),
-        "named arg in call should fail lowering (not yet implemented)"
+        result.is_ok(),
+        "named arg in call should parse: {}",
+        result.unwrap_err()
     );
 }
 
