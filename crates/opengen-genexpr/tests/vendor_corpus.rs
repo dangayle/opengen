@@ -46,7 +46,7 @@ fn vendor_genexpr_corpus_report() {
 
 #[test]
 fn parse_failure_1_comma_in_for_init() {
-    let src = "for(i=0, j=0; i<10; i=i+1) { out1 = i; }";
+    let src = "for(i=0, j=0; i<10; i+=1) { out1 = i; }";
     let result = opengen_genexpr::parse(src);
     assert!(
         result.is_ok(),

@@ -481,17 +481,52 @@ impl Parser {
         self.advance()?; // consume 'for'
         self.expect(Token::LParen)?;
 
-        // Init: parse expression statement or empty
+        // Init: comma-separated assignments or empty.
+        // gen~ supports for (i=0, j=0; ...) with comma-delimited inits.
         let init = if self.current != Token::Semicolon {
-            Some(Box::new(self.parse_statement()?))
+            let mut inits: Vec<Statement> = Vec::new();
+            loop {
+                let lhs = self.parse_expr()?;
+                // Check for assignment: ident = expr
+                let stmt = if self.current == Token::Equals {
+                    let name = match &lhs {
+                        Expr::Ident(s) => s.clone(),
+                        _ => return Err(format!(
+                            "expected identifier on left of = in for-init, got {:?}", lhs
+                        )),
+                    };
+                    self.advance()?; // consume =
+                    let rhs = self.parse_expr()?;
+                    Statement {
+                        kind: StatementKind::Assign { name, expr: rhs },
+                        loc,
+                    }
+                } else {
+                    Statement {
+                        kind: StatementKind::ExprStmt(lhs),
+                        loc,
+                    }
+                };
+                inits.push(stmt);
+                if self.current == Token::Comma {
+                    self.advance()?;
+                } else {
+                    break;
+                }
+            }
+            self.expect(Token::Semicolon)?;
+            if inits.len() == 1 {
+                Some(Box::new(inits.into_iter().next().unwrap()))
+            } else {
+                Some(Box::new(Statement {
+                    kind: StatementKind::Block(inits),
+                    loc,
+                }))
+            }
         } else {
+            self.expect(Token::Semicolon)?;
             None
         };
-        // The parse_statement for init consumed the semicolon, so we just need
-        // to handle the case where init is empty.
-        if init.is_none() {
-            self.expect(Token::Semicolon)?;
-        }
 
         // Condition
         let cond = if self.current != Token::Semicolon {
