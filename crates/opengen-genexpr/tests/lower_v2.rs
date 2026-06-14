@@ -299,21 +299,21 @@ fn delay_decl_works() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Require → "require unsupported in M2"
+//  Require → accepted as no-op in M3
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn require_unsupported() {
+fn require_accepted() {
     let ast = parse("require \"foo.genexpr\"; out1 = 0;").unwrap();
-    let err = lower(&ast).unwrap_err();
-    assert!(err.msg.contains("require unsupported"), "got: {}", err.msg);
+    let graph = lower(&ast).expect("require should now be accepted");
+    assert_eq!(graph.nodes().count(), 2); // constant + output
 }
 
 #[test]
-fn require_with_parens_unsupported() {
+fn require_with_parens_accepted() {
     let ast = parse("require(\"foo.genexpr\"); out1 = 0;").unwrap();
-    let err = lower(&ast).unwrap_err();
-    assert!(err.msg.contains("require unsupported"), "got: {}", err.msg);
+    let graph = lower(&ast).expect("require with parens should be accepted");
+    assert_eq!(graph.nodes().count(), 2);
 }
 
 // ═══════════════════════════════════════════════════════════════════

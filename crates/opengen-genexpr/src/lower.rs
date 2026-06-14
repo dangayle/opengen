@@ -861,7 +861,9 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 Err(LowerError { msg: "function declarations not yet implemented (Task 16)".to_string(), loc: None })
             }
             StatementKind::Require(_) => {
-                Err(LowerError { msg: "require unsupported in M2".to_string(), loc: None })
+                // require is parsed but not wired to the host graph in M3.
+                // Silently accepted; the host patcher handles binding injection.
+                Ok(())
             }
             StatementKind::ExprStmt(expr) => {
                 self.collect_meta_from_expr(expr, meta);
@@ -1113,7 +1115,9 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 Err(LowerError { msg: "function declarations not yet implemented (Task 16)".to_string(), loc: None })
             }
             StatementKind::Require(_) => {
-                Err(LowerError { msg: "require unsupported in M2".to_string(), loc: None })
+                // require is parsed but not wired to the host graph in M3.
+                // Silently accepted; the host patcher handles binding injection.
+                Ok(vec![])
             }
             StatementKind::ExprStmt(expr) => {
                 let e = self.lower_region_expr(expr, meta, input_port_of)?;
@@ -1696,7 +1700,9 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                 Err(LowerError { msg: "function declarations not yet implemented (Task 16)".to_string(), loc: None })
             }
             StatementKind::Require(_) => {
-                Err(LowerError { msg: "require unsupported in M2".to_string(), loc: None })
+                // require is parsed but not wired to the host graph in M3.
+                // Silently accepted; the host patcher handles binding injection.
+                Ok(())
             }
             StatementKind::ExprStmt(expr) => {
                 // Expression statement: lower expr but don't bind (side-effect only, e.g. poke)
