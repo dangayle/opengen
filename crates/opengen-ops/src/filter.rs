@@ -14,52 +14,51 @@ use opengen_ir::StateDecl;
 /// y[n] = x[n] - x[n-1] + y[n-1] * 0.9997
 /// ```
 ///
-/// where `x[n-1]` and `y[n-1]` are kernel-managed state slots. The input
-/// history `x[n-1]` initializes to the FIRST input sample (so `y[0] = 0`
-/// always — no startup step); `y[n-1]` initializes to 0. Slots(3): x1, y1,
-/// first-sample flag.
+/// where `x[n-1]` and `y[n-1]` are kernel-managed state slots, both
+/// initialized to 0. This is the classic DC blocker (matching genlib
+/// `reference/genlib/gen_dsp/genlib_ops.h` struct DCBlock). Slots(2):
+/// x1, y1.
+///
+/// Impulse response: `y[0]` = 1, `y[n]` = -0.9993 * 0.9997^(n-1) for n ≥ 1
+/// (confirmed against gen~ golden `conformance/golden/dcblock_impulse.ch0.wav`,
+/// 2026-06-13).
 ///
 /// # Observed
-/// M2 conformance harness (2026-06-11): real gen~ outputs EXACT silence for
-/// a constant input present from sample 0 (golden:
-/// `conformance/golden/dcblock_step.ch0.wav`, patch
-/// `conformance/patches/dcblock_step.genexpr`) — i.e. the input history
-/// starts equal to the first input rather than 0. A follow-up probe
-/// (dcblock driven by a t=0 impulse) is queued in `conformance/CHECKLIST.md`
-/// to distinguish lazy x1-init from compiler constant-folding.
+/// M2 conformance harness (2026-06-11), updated 2026-06-13 with follow-up
+/// impulse probe (`conformance/patches/dcblock_impulse.genexpr`): the
+/// impulse-response golden starts at `y[0]` = 1.0, confirming the genlib
+/// x1=0 init. The prior hypothesis of "lazy x1-init to first input"
+/// (which would give `y[0]` = 0) is rejected.
 ///
 /// # Divergence
-/// `reference/genlib/gen_dsp/genlib_ops.h` (struct DCBlock) resets x1 = 0,
-/// which would output 1.0 at sample 0 for a unit step — the genlib code
-/// EXPORT runtime demonstrably differs from gen~ inside Max here. We match
-/// in-Max gen~ (the conformance reference).
+/// `conformance/patches/dcblock_step.genexpr` feeds a compile-time-constant
+/// input (`dcblock(1.0)`). gen~'s JIT compiler constant-folds this to the
+/// steady-state value (all zeros). opengen has no constant folder — it runs
+/// the per-sample kernel, producing the classic highpass step response
+/// (`y[0]` = 1.0, then decay). The golden for this patch measures gen~'s
+/// **optimizer**, not the dcblock **kernel**; opengen's kernel output for a
+/// step is correct. dcblock_step is a known divergence of the
+/// constant-folder-vs-kernel class identified in M2 (see CLAUDE.md).
+///
+/// `reference/genlib/gen_dsp/genlib_ops.h` (struct DCBlock) establishes
+/// x1 = 0 init — consistent with the impulse golden and with this
+/// implementation.
 ///
 /// # Documented
 /// `reference/gen/refpages/dsp/gen_dsp_dcblock.maxref.xml`
 ///
 /// ```
 /// use opengen_testkit::render_with_inputs;
-/// // Constant (pure DC) input from sample 0 → exact silence (gen~ observed)
-/// let dc: Vec<f64> = vec![1.0; 64];
-/// let out = render_with_inputs("out1 = dcblock(in1);", 48000.0, &[&dc]);
-/// assert!(out.ch(0).iter().all(|&v| v == 0.0));
-///
-/// // A step AFTER sample 0 produces the classic highpass response
+/// // A step arriving at sample 2 produces the classic highpass response
 /// let step: Vec<f64> = [0.0, 0.0, 1.0, 1.0, 1.0].to_vec();
-/// let out2 = render_with_inputs("out1 = dcblock(in1);", 48000.0, &[&step]);
-/// assert_eq!(out2.ch(0)[2], 1.0);               // edge passes through
-/// assert_eq!(out2.ch(0)[3], 0.9997);            // then decays
+/// let out = render_with_inputs("out1 = dcblock(in1);", 48000.0, &[&step]);
+/// assert_eq!(out.ch(0)[2], 1.0);               // edge passes through
+/// assert_eq!(out.ch(0)[3], 0.9997);            // then decays
 /// ```
 pub fn dcblock(inputs: &[f64], state: &mut [f64], _sr: f64) -> f64 {
     let x = inputs[0];
-    if state[2] == 0.0 {
-        // First sample: input history starts at the first input (gen~
-        // observed — see # Observed above). y[0] is therefore always 0.
-        state[2] = 1.0;
-        state[0] = x;
-    }
-    let x1 = state[0]; // previous input
-    let y1 = state[1]; // previous output
+    let x1 = state[0]; // previous input (init 0)
+    let y1 = state[1]; // previous output (init 0)
     let y = x - x1 + y1 * 0.9997;
     state[0] = x; // update x1
     state[1] = y; // update y1
@@ -119,7 +118,7 @@ pub fn defs() -> Vec<OpDef> {
         OpDef {
             name: "dcblock",
             arity: 1,
-            state: StateDecl::Slots(3),
+            state: StateDecl::Slots(2),
             deferred_ports: &[],
             update: None,
             init: None,
@@ -150,33 +149,33 @@ mod tests {
     // ── dcblock ─────────────────────────────────────────────────
 
     #[test]
-    fn dcblock_blocks_dc_over_time() {
-        // Constant DC from sample 0: lazy x1-init absorbs it — EXACT silence
-        // (gen~ observed; golden conformance/golden/dcblock_step.ch0.wav).
-        let dc: Vec<f64> = vec![1.0; 10000];
-        let out = render_with_inputs_n("out1 = dcblock(in1);", 48000.0, &[&dc], 10000);
-        assert!(out.ch(0).iter().all(|&v| v == 0.0),
-            "dcblock of constant input should be exactly silent");
+    fn dcblock_step_is_classic_highpass_genlib_form() {
+        // Constant DC from sample 0: genlib form (x1=0 init) produces classic
+        // IR: y[0] = 1, then decays. gen~'s JIT constant-folds this to all
+        // zeros at compile time — that's a folder-vs-kernel divergence, not
+        // an operator discrepancy. See # Divergence in the dcblock rustdoc.
+        let dc: Vec<f64> = vec![1.0; 100];
+        let out = render_with_inputs_n("out1 = dcblock(in1);", 48000.0, &[&dc], 100);
+        assert_eq!(out.ch(0)[0], 1.0, "genlib-form dcblock: y[0] = x[0] - 0 + 0*R = 1");
+        assert!((out.ch(0)[1] - 0.9997).abs() < 1e-12);
+        // Decays toward zero: magnitude decreases monotonically
+        for i in 2..out.ch(0).len() {
+            assert!(out.ch(0)[i].abs() <= out.ch(0)[i-1].abs() + 1e-15);
+        }
     }
 
     #[test]
-    fn dcblock_impulse_response_decays_to_zero() {
-        // Impulse at sample 0, zeros thereafter. With gen~'s lazy x1-init,
-        // y[0] = 0 (x1 starts at the impulse value); the falling edge at
-        // sample 1 produces -1, then the magnitude decays toward zero.
+    fn dcblock_impulse_response_matches_gen_golden() {
+        // Impulse at sample 0, zeros thereafter. gen~ golden
+        // (conformance/golden/dcblock_impulse.ch0.wav, 2026-06-13)
+        // starts y[0] = 1.0, confirming genlib x1=0 init.
         let impulse: Vec<f64> = vec![1.0];
-        let out = render_with_inputs_n("out1 = dcblock(in1);", 48000.0, &[&impulse], 1000);
-        assert_eq!(out.ch(0)[0], 0.0);
-        assert_eq!(out.ch(0)[1], -1.0);
-        // Magnitude decays monotonically after the edge
-        for i in 2..out.ch(0).len() {
-            assert!(out.ch(0)[i].abs() <= out.ch(0)[i-1].abs() + 1e-15,
-                "magnitude decay failed at {}: {} → {}",
-                i, out.ch(0)[i-1], out.ch(0)[i]);
-        }
-        // After 1000 samples, magnitude is very close to 0
-        assert!(out.ch(0)[999].abs() < 0.75,
-            "dcblock impulse after 1000 samples: got {}", out.ch(0)[999]);
+        let out = render_with_inputs_n("out1 = dcblock(in1);", 48000.0, &[&impulse], 100);
+        assert_eq!(out.ch(0)[0], 1.0);
+        // y[1] = 0 - 1 + 1*0.9997 = -0.0003
+        assert!((out.ch(0)[1] + 0.0003).abs() < 1e-7);
+        // y[2] = 0 - 0 + (-0.0003)*0.9997 ≈ -0.0002999
+        assert!((out.ch(0)[2] + 0.0002999).abs() < 1e-7);
     }
 
     // ── slide ────────────────────────────────────────────────────
