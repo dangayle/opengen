@@ -368,6 +368,7 @@ dependencies = [
  "clap",
  "opengen-analysis",
  "opengen-compile",
+ "opengen-emit-cpp",
  "opengen-genexpr",
  "opengen-ops",
  "opengen-testkit",

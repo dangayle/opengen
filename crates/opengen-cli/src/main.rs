@@ -63,6 +63,20 @@ enum Commands {
         #[arg(long, default_value = "100")]
         samples: usize,
     },
+
+    /// Emit C++ source from a patch
+    Emit {
+        /// Path to .genexpr patch file
+        patch: PathBuf,
+
+        /// Sample rate in Hz
+        #[arg(long, default_value = "48000")]
+        sr: u32,
+
+        /// Output directory (default: current dir)
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn main() {
@@ -77,6 +91,9 @@ fn main() {
         }
         Commands::Probe { patch, sr, tap, samples } => {
             probe_command(patch, sr as f64, tap, samples)
+        }
+        Commands::Emit { patch, sr, output } => {
+            emit_command(patch, sr as f64, output)
         }
     };
     
@@ -181,5 +198,36 @@ fn probe_command(
         }
     }
     
+    Ok(())
+}
+
+fn emit_command(
+    patch_path: PathBuf,
+    sr: f64,
+    output_dir: Option<PathBuf>,
+) -> Result<(), String> {
+    let src = std::fs::read_to_string(&patch_path)
+        .map_err(|e| format!("failed to read {}: {}", patch_path.display(), e))?;
+
+    let graph = opengen_genexpr::parse_and_lower(&src)
+        .map_err(|e| format!("parse error: {}", e))?;
+
+    let cpp = opengen_emit_cpp::emit_cpp(&graph, &opengen_ops::Registry::core(), sr)
+        .map_err(|e| format!("emit error: {}", e))?;
+
+    let out_dir = output_dir.unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("cannot create output dir: {}", e))?;
+
+    let header_path = out_dir.join("opengen_patch.h");
+    let body_path = out_dir.join("opengen_patch.cpp");
+
+    std::fs::write(&header_path, &cpp.header)
+        .map_err(|e| format!("failed to write {}: {}", header_path.display(), e))?;
+    std::fs::write(&body_path, &cpp.body)
+        .map_err(|e| format!("failed to write {}: {}", body_path.display(), e))?;
+
+    println!("Emitted {}", header_path.display());
+    println!("Emitted {}", body_path.display());
     Ok(())
 }

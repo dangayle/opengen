@@ -14,4 +14,5 @@ opengen-genexpr = { workspace = true }
 opengen-compile = { workspace = true }
 opengen-ops = { workspace = true }
 opengen-analysis = { workspace = true }
+opengen-emit-cpp = { workspace = true }
 clap = { version = "4", features = ["derive"] }
