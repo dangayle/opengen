@@ -131,13 +131,13 @@ pub fn atan2(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 
 pub fn defs() -> Vec<OpDef> {
     vec![
-        OpDef { name: "sin", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: sin, cpp_kernel: None, emit_cpp_call: None },
-        OpDef { name: "cos", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: cos, cpp_kernel: None, emit_cpp_call: None },
-        OpDef { name: "tan", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: tan, cpp_kernel: None, emit_cpp_call: None },
-        OpDef { name: "asin", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: asin, cpp_kernel: None, emit_cpp_call: None },
-        OpDef { name: "acos", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: acos, cpp_kernel: None, emit_cpp_call: None },
-        OpDef { name: "atan", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: atan, cpp_kernel: None, emit_cpp_call: None },
-        OpDef { name: "atan2", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: atan2, cpp_kernel: None, emit_cpp_call: None },
+        OpDef { name: "sin", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: sin, cpp_kernel: Some("return std::sin({a0});"), emit_cpp_call: None },
+        OpDef { name: "cos", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: cos, cpp_kernel: Some("return std::cos({a0});"), emit_cpp_call: None },
+        OpDef { name: "tan", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: tan, cpp_kernel: Some("return std::tan({a0});"), emit_cpp_call: None },
+        OpDef { name: "asin", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: asin, cpp_kernel: Some("return std::asin({a0});"), emit_cpp_call: None },
+        OpDef { name: "acos", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: acos, cpp_kernel: Some("return std::acos({a0});"), emit_cpp_call: None },
+        OpDef { name: "atan", arity: 1, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: atan, cpp_kernel: Some("return std::atan({a0});"), emit_cpp_call: None },
+        OpDef { name: "atan2", arity: 2, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: atan2, cpp_kernel: Some("return std::atan2({a0}, {a1});"), emit_cpp_call: None },
     ]
 }
 

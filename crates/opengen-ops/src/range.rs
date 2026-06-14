@@ -218,9 +218,9 @@ pub fn mix(inputs: &[f64], _state: &mut [f64], _sr: f64) -> f64 {
 
 pub fn defs() -> Vec<OpDef> {
     vec![
-        OpDef { name: "clip", arity: 3, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: clip, cpp_kernel: None, emit_cpp_call: None },
-        OpDef { name: "wrap", arity: 3, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: wrap, cpp_kernel: None, emit_cpp_call: None },
-        OpDef { name: "fold", arity: 3, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: fold, cpp_kernel: None, emit_cpp_call: None },
+        OpDef { name: "clip", arity: 3, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: clip, cpp_kernel: Some("return ({a0} < {a1}) ? {a1} : (({a0} > {a2}) ? {a2} : {a0});"), emit_cpp_call: None },
+        OpDef { name: "wrap", arity: 3, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: wrap, cpp_kernel: Some("return {a0} - std::floor({a0} / {a1}) * {a1};"), emit_cpp_call: None },
+        OpDef { name: "fold", arity: 3, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: fold, cpp_kernel: Some("return {a1} - std::abs(std::fmod(std::abs({a0}), 2.0 * {a1}) - {a1});"), emit_cpp_call: None },
         OpDef { name: "scale", arity: 5, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: scale, cpp_kernel: None, emit_cpp_call: None },
         OpDef { name: "mix", arity: 3, state: StateDecl::None, deferred_ports: &[], update: None, init: None, kernel: mix, cpp_kernel: None, emit_cpp_call: None },
     ]
