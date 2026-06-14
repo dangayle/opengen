@@ -138,6 +138,10 @@ impl<'a> BuildCtx<'a> {
                 self.insert_box_info(&bx.id, &BoxKind::Constant(0.0), id, bx.numinlets);
                 continue;
             }
+            if bx.maxclass == "comment" {
+                // Comments are visual annotations — no DSP nodes
+                continue;
+            }
             let kind = classify_box_text(&bx.text);
             self.create_node_for_box(bx, &kind)?;
         }
@@ -1067,6 +1071,29 @@ mod tests {
         // out1 = in1 * g = 2 * 2 = 4
         let out = build_and_render_with_inputs(src, 48000.0, &[&[2.0]]);
         assert_eq!(out.ch(0), &[4.0]); // in1 * setparam_driven_g = 2 * 2
+    }
+
+    /// Comment boxes (maxclass "comment") are visual annotations — silently skipped.
+    #[test]
+    fn build_skips_comment_boxes() {
+        let src = r#"{
+            "patcher": {
+                "fileversion": 1,
+                "classnamespace": "dsp.gen",
+                "rect": [0, 0, 400, 300],
+                "boxes": [
+                    {"box": {"id": "obj-1", "maxclass": "newobj", "numinlets": 0, "numoutlets": 1, "text": "in 1"}},
+                    {"box": {"id": "obj-2", "maxclass": "comment", "numinlets": 0, "numoutlets": 0, "text": "this is a note"}},
+                    {"box": {"id": "obj-3", "maxclass": "newobj", "numinlets": 1, "numoutlets": 0, "text": "out 1"}}
+                ],
+                "lines": [
+                    {"patchline": {"source": ["obj-1", 0], "destination": ["obj-3", 0]}}
+                ]
+            }
+        }"#;
+
+        let out = build_and_render_with_inputs(src, 48000.0, &[&[7.0]]);
+        assert_eq!(out.ch(0), &[7.0]); // passthrough, comment ignored
     }
 
     /// A line referencing a non-existent source box should produce Err, not a panic.
