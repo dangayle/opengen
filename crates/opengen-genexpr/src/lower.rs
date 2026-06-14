@@ -1248,7 +1248,7 @@ impl<'a, 'b> Lowerer<'a, 'b> {
                     data_ref: None,
                 })
             }
-            Expr::Call { name, args, named_args } => {
+            Expr::Call { name, args, named_args: _ } => {
                 // Named args are accepted syntactically but not used by any gen~ op.
                 // They are silently ignored at the expression level.
 
